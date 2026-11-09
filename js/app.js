@@ -5,7 +5,7 @@ import {
 import { CURRENCIES, fetchSpot, fetchFx, fetchDay } from './prices.js';
 import { load, save, DEFAULT_SETTINGS, uid } from './store.js';
 
-export const BUILD = '2026.11.09-1';
+export const BUILD = '2026.11.09-2';
 
 /* ======================================================================
    State
@@ -37,7 +37,7 @@ const S = {
   vaultFilter: 'all',
 };
 
-const cur = () => CURRENCIES[S.settings.currency] || CURRENCIES.SAR;
+const cur = () => CURRENCIES[S.settings.currency] || CURRENCIES.BHD;
 const defK = () => S.settings.defaultKarat;
 
 function fxRate() {
@@ -128,6 +128,7 @@ const I = {
   chevron: '<path d="M15 6l-6 6 6 6"/>',
   check: '<path d="M5 12l5 5 9-10"/>',
   edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
+  copy: '<rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
   gem: '<path d="M6 4h12l3 5-9 11L3 9z"/><path d="M3 9h18M9 4l3 16 3-16"/>',
 };
 const icon = (name, size = 22) => `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[name]}</svg>`;
@@ -660,7 +661,10 @@ function renderCalc() {
             ${karatSeg('k', it.k)}
           </div>`).join('')}
       </div>
-      <button class="add" data-action="add">${icon('plus', 18)} إضافة قطعة أخرى</button>
+      <div class="btn-row spread">
+        <button class="add" data-action="add">${icon('plus', 18)} إضافة قطعة أخرى</button>
+        <button class="add muted" data-action="clear">مسح الكل</button>
+      </div>
     </section>
 
     <section class="card">
@@ -694,8 +698,8 @@ function renderCalc() {
 
     <div class="actions">
       <button class="btn primary" data-action="save">${icon('save', 18)} حفظ</button>
-      <button class="btn" data-action="share">${icon('share', 18)} مشاركة</button>
-      <button class="btn ghost" data-action="clear">مسح</button>
+      <button class="btn" data-action="share">${icon('share', 18)} صورة</button>
+      <button class="btn" data-action="copy">${icon('copy', 18)} نسخ</button>
     </div>`;
   paintCalcResult();
 
@@ -736,10 +740,12 @@ function renderCalc() {
       persistCalc();
       renderCalc();
     }
-    else if (b.dataset.action === 'share') {
+    else if (b.dataset.action === 'share' || b.dataset.action === 'copy') {
       const r = calcResult();
       if (!r) return toast('أكمل البيانات أولًا');
-      shareText(describe({ mode: C.mode, items: C.items, result: r, p24: calcP24(), currency: S.settings.currency, ...C }));
+      const e = { ...C, result: r, p24: calcP24(), currency: S.settings.currency, vatRate: S.settings.vatRate };
+      if (b.dataset.action === 'copy') copyText(describe(e));
+      else shareImage(e).catch(() => toast('تعذّر إنشاء الصورة'));
     }
     else if (b.dataset.action === 'save') openSaveSheet();
   };
@@ -845,31 +851,119 @@ function paintCalcResult() {
   box.innerHTML = resultHTML(C.mode, r, P, parseNum(C.override) > 0);
 }
 
-// Plain-text summary for sharing.
-function describe(e) {
+// One summary feeds both the text and the image share.
+function summary(e) {
   const c = CURRENCIES[e.currency] || cur();
   const m = (n) => `${fmt(n, c.dec)} ${c.sym}`;
   const r = e.result;
   const items = (e.items || []).filter((it) => parseNum(it.w) > 0);
-  const lines = [];
-  const title = { analyze: 'تحليل فاتورة ذهب', price: 'تسعير قطعة ذهب', sell: 'تقييم بيع ذهب' }[e.mode];
-  lines.push(`${title}${e.shop ? ` — ${e.shop}` : ''}`);
-  items.forEach((it) => lines.push(`• ${fmtW(parseNum(it.w))} غ عيار ${it.k}`));
-  lines.push(`قيمة الذهب: ${m(r.gold)}`);
-  if (e.mode === 'analyze' && !r.belowGold) {
-    lines.push(`المصنعية: ${m(r.making)} (${m(r.makingPerGram)} للغرام · ${fmtPct(r.makingPct)})`);
-    lines.push(`الإجمالي: ${m(r.paid)}`);
-  } else if (e.mode === 'price') {
-    lines.push(`المصنعية: ${m(r.making)}`);
-    if (r.vat) lines.push(`الضريبة: ${m(r.vat)}`);
-    lines.push(`الإجمالي: ${m(r.total)}`);
-  } else if (e.mode === 'sell' && r.offer != null) {
-    lines.push(`عرض المحل: ${m(r.offer)} (خصم ${m(r.deductionPerGram)} للغرام)`);
-  }
   const k = items[0]?.k || 21;
-  lines.push(`سعر غرام عيار ${k}: ${m(karatPrice(e.p24, k))} · ${dateFmt(e.ts || Date.now(), { day: 'numeric', month: 'long', year: 'numeric' })}`);
-  lines.push('— عيار · حاسبة الذهب');
+  const vatName = `الضريبة ${fmt((e.vatRate ?? S.settings.vatRate) * 100, 0)}%`;
+  const out = {
+    title: { analyze: 'تحليل فاتورة ذهب', price: 'تسعير قطعة ذهب', sell: 'تقييم بيع ذهب' }[e.mode],
+    shop: e.shop || '',
+    pieces: items.map((it) => `${fmtW(parseNum(it.w))} غ · عيار ${it.k}`),
+    hero: null,
+    rows: [['قيمة الذهب', m(r.gold)]],
+    foot: `سعر غرام عيار ${k}: ${m(karatPrice(e.p24, k))} · ${dateFmt(e.ts || Date.now(), { day: 'numeric', month: 'long', year: 'numeric' })}`,
+  };
+  if (e.mode === 'analyze' && !r.belowGold) {
+    out.hero = ['المصنعية لكل غرام', m(r.makingPerGram), `${LEVELS[r.level].label} · ${fmtPct(r.makingPct)} من قيمة الذهب`];
+    out.rows.push(['المصنعية الكلية', m(r.making)]);
+    if (r.vat) out.rows.push([vatName, m(r.vat)]);
+    out.rows.push(['الإجمالي', m(r.paid)]);
+  } else if (e.mode === 'analyze') {
+    out.rows.push(['المبلغ المدفوع', m(parseNum(e.total))]);
+  } else if (e.mode === 'price') {
+    out.hero = ['السعر النهائي', m(r.total), r.making > 0 ? `مصنعية ${fmt(r.makingPerGram, c.dec)} ${c.sym} للغرام` : ''];
+    out.rows.push(['المصنعية', m(r.making)]);
+    if (r.vat) out.rows.push([vatName, m(r.vat)]);
+  } else if (r.offer != null) {
+    out.hero = ['خصم المحل لكل غرام', m(r.deductionPerGram), `${fmtPct(r.deductionPct)} من قيمة الذهب`];
+    out.rows.push(['عرض المحل', m(r.offer)]);
+  } else {
+    out.hero = ['قيمة ذهبك بسعر السوق', m(r.gold), ''];
+  }
+  return out;
+}
+
+function describe(e) {
+  const s = summary(e);
+  const lines = [`${s.title}${s.shop ? ` — ${s.shop}` : ''}`];
+  s.pieces.forEach((p) => lines.push(`• ${p}`));
+  if (s.hero) lines.push(`${s.hero[0]}: ${s.hero[1]}${s.hero[2] ? ` (${s.hero[2]})` : ''}`);
+  s.rows.forEach(([a, b]) => lines.push(`${a}: ${b}`));
+  lines.push(s.foot, '— عيار · حاسبة الذهب');
   return lines.join('\n');
+}
+
+// Draws the result as a "display case" card, 2x for crisp text on phones.
+async function shareImage(e) {
+  const s = summary(e);
+  const FONT = "'IBM Plex Sans Arabic', sans-serif";
+  try {
+    await Promise.all(['400', '600'].map((w) => document.fonts.load(`${w} 20px ${FONT}`, 'عيار 0123')));
+  } catch { /* fall back to system font */ }
+  const W = 720, PAD = 48, rowH = 58;
+  const H = 230 + (s.hero ? 170 : 0) + s.rows.length * rowH + 110;
+  const c = document.createElement('canvas');
+  c.width = W * 2; c.height = H * 2;
+  const x = c.getContext('2d');
+  x.scale(2, 2);
+  x.direction = 'rtl';
+  const font = (size, w = 400) => { x.font = `${w} ${size}px ${FONT}`; };
+  const text = (t, px, py, color, size, w = 400, align = 'right') => { font(size, w); x.fillStyle = color; x.textAlign = align; x.fillText(t, px, py); };
+  const rr = (px, py, w, h, r) => { x.beginPath(); x.roundRect(px, py, w, h, r); };
+
+  const g = x.createLinearGradient(0, 0, 0, H);
+  g.addColorStop(0, '#2b2720'); g.addColorStop(1, '#16140f');
+  x.beginPath(); x.rect(0, 0, W, H); x.fillStyle = g; x.fill(); // square: chat apps paint transparent corners black
+  const glow = x.createRadialGradient(W, 0, 0, W, 0, W * 0.9);
+  glow.addColorStop(0, 'rgba(226,181,82,0.22)'); glow.addColorStop(1, 'rgba(226,181,82,0)');
+  x.fillStyle = glow; x.fill();
+
+  let y = 78;
+  text('◆ عيار', W - PAD, y, '#e2b552', 26, 600);
+  text(dateFmt(e.ts || Date.now(), { day: 'numeric', month: 'long', year: 'numeric' }), PAD, y, '#b8af9d', 18, 400, 'left');
+  y += 56;
+  text(s.title + (s.shop ? ` · ${s.shop}` : ''), W - PAD, y, '#f5efe2', 30, 600);
+  y += 40;
+  text(s.pieces.join('  ·  '), W - PAD, y, '#b8af9d', 20);
+  y += 34;
+
+  if (s.hero) {
+    rr(PAD, y, W - PAD * 2, 140, 24); x.fillStyle = 'rgba(255,255,255,0.06)'; x.fill();
+    text(s.hero[0], W / 2, y + 40, '#b8af9d', 20, 400, 'center');
+    text(s.hero[1], W / 2, y + 96, '#e2b552', 50, 600, 'center');
+    if (s.hero[2]) text(s.hero[2], W / 2, y + 128, '#b8af9d', 17, 400, 'center');
+    y += 170;
+  }
+  s.rows.forEach(([a, b], i) => {
+    const last = i === s.rows.length - 1;
+    text(a, W - PAD, y + 34, last ? '#f5efe2' : '#b8af9d', 21, last ? 600 : 400);
+    text(b, PAD, y + 34, '#f5efe2', 23, 600, 'left');
+    if (!last) { x.fillStyle = 'rgba(255,255,255,0.08)'; x.fillRect(PAD, y + rowH - 1, W - PAD * 2, 1); }
+    y += rowH;
+  });
+  y += 40;
+  text(s.foot, W / 2, y, '#8f8778', 16, 400, 'center');
+  text('الأسعار استرشادية', W / 2, y + 28, '#6f6a5f', 14, 400, 'center');
+
+  const blob = await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('blob'))), 'image/png'));
+  const file = new File([blob], 'iyar-gold.png', { type: 'image/png' });
+  if (navigator.canShare?.({ files: [file] })) {
+    try { await navigator.share({ files: [file] }); return; } catch (err) { if (err?.name === 'AbortError') return; }
+  }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = file.name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast('تم حفظ الصورة');
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); toast('تم النسخ'); } catch { shareText(text); }
 }
 
 function openSaveSheet(existing) {
@@ -880,7 +974,7 @@ function openSaveSheet(existing) {
   const ownedDefault = existing ? existing.owned : mode !== 'sell';
   openSheet(`
     <h2 class="sheet-title">${existing ? 'تعديل' : 'حفظ في السجل'}</h2>
-    <label class="field"><span class="label">اسم المحل</span><span class="input"><input data-s="shop" maxlength="60" placeholder="مثال: مجوهرات الحسن" value="${esc(existing?.shop || '')}"></span></label>
+    <label class="field"><span class="label">اسم المحل</span><span class="input"><input data-s="shop" maxlength="60" placeholder="مثال: مجوهرات دلمون" value="${esc(existing?.shop || '')}"></span></label>
     <label class="field"><span class="label">ملاحظة</span><span class="input"><input data-s="note" maxlength="120" placeholder="خاتم، سلسلة، طقم…" value="${esc(existing?.note || '')}"></span></label>
     ${mode !== 'sell' ? `<label class="switch"><input type="checkbox" data-s="owned" ${ownedDefault ? 'checked' : ''}><span class="track"></span><span>اشتريتها — أضفها إلى مجوهراتي</span></label>` : ''}
     <button class="btn primary block" data-action="confirm-save">${icon('check', 18)} ${existing ? 'حفظ التعديل' : 'حفظ'}</button>`,
@@ -1038,7 +1132,8 @@ function openEntry(id) {
     ${nowVal != null && sameCur ? `<div class="meta-row"><span>قيمة الذهب اليوم</span><b>${money(nowVal)}</b></div>` : ''}
     <div class="sheet-actions">
       <button class="btn" data-a="load">${icon('calc', 18)} افتح في الحاسبة</button>
-      <button class="btn" data-a="share">${icon('share', 18)} مشاركة</button>
+      <button class="btn" data-a="share">${icon('share', 18)} صورة</button>
+      <button class="btn" data-a="copy">${icon('copy', 18)} نسخ</button>
       <button class="btn" data-a="edit">${icon('edit', 18)} تعديل</button>
       <button class="btn danger" data-a="del">${icon('trash', 18)} حذف</button>
     </div>`,
@@ -1046,7 +1141,8 @@ function openEntry(id) {
     sheet.onclick = (ev) => {
       const a = ev.target.closest('[data-a]')?.dataset.a;
       if (!a) return;
-      if (a === 'share') shareText(describe(e));
+      if (a === 'share') shareImage(e).catch(() => toast('تعذّر إنشاء الصورة'));
+      else if (a === 'copy') copyText(describe(e));
       else if (a === 'edit') openSaveSheet(e);
       else if (a === 'load') {
         Object.assign(S.calc, {
@@ -1168,7 +1264,7 @@ function renderTools() {
 
     <section class="card subtle about">
       <p><b>عيار</b> · حاسبة الذهب والمصنعية</p>
-      <p class="muted small">الأسعار من عدة مصادر عالمية (Gold API، Swissquote، ومرجع يومي) ويؤخذ الوسيط بينها لاستبعاد أي سعر شاذ. الأسعار استرشادية وقد تختلف قليلًا عن أسعار المحلات.</p>
+      <p class="muted small">الأسعار من عدة مصادر عالمية (Gold API وAwesomeAPI ومرجع يومي) ويؤخذ الوسيط بينها لاستبعاد أي سعر شاذ. الأسعار استرشادية وقد تختلف قليلًا عن أسعار المحلات.</p>
       <p class="muted small">الإصدار ${num(BUILD)}</p>
     </section>`;
   paintZakat();

@@ -2,6 +2,8 @@
 //
 // Accuracy strategy:
 //  1. Ask every real-time source in parallel (each with its own timeout).
+//     Only feeds that allow browser (CORS) access can be used from a phone:
+//     Gold API is the primary; AwesomeAPI is a rate-limited backup.
 //  2. Reject anything implausible, then take the median of the sources that
 //     agree within 1% — one bad feed can't move the price.
 //  3. If no real-time feed answers, fall back to the daily reference rate,
@@ -13,11 +15,11 @@
 import { median } from './calc.js';
 
 export const CURRENCIES = {
+  BHD: { name: 'دينار بحريني', sym: 'د.ب', dec: 3, vat: 0.1, basis: 'full', peg: 0.376, country: 'البحرين' },
   SAR: { name: 'ريال سعودي', sym: 'ر.س', dec: 2, vat: 0.15, basis: 'full', peg: 3.75, country: 'السعودية' },
   AED: { name: 'درهم إماراتي', sym: 'د.إ', dec: 2, vat: 0.05, basis: 'full', peg: 3.6725, country: 'الإمارات' },
   KWD: { name: 'دينار كويتي', sym: 'د.ك', dec: 3, vat: 0, basis: 'none', peg: null, approx: 0.307, country: 'الكويت' },
   QAR: { name: 'ريال قطري', sym: 'ر.ق', dec: 2, vat: 0, basis: 'none', peg: 3.64, country: 'قطر' },
-  BHD: { name: 'دينار بحريني', sym: 'د.ب', dec: 3, vat: 0.1, basis: 'full', peg: 0.376, country: 'البحرين' },
   OMR: { name: 'ريال عماني', sym: 'ر.ع', dec: 3, vat: 0.05, basis: 'full', peg: 0.3845, country: 'عُمان' },
   JOD: { name: 'دينار أردني', sym: 'د.أ', dec: 3, vat: 0, basis: 'none', peg: 0.709, country: 'الأردن' },
   EGP: { name: 'جنيه مصري', sym: 'ج.م', dec: 2, vat: 0, basis: 'none', peg: null, approx: 48.5, country: 'مصر' },
@@ -58,17 +60,13 @@ export function parseGoldApi(j) {
   return { id: 'gold-api', name: 'Gold API', kind: 'live', price, ts };
 }
 
-export function parseSwissquote(j) {
-  if (!Array.isArray(j)) throw new Error('bad payload');
-  const mids = [];
-  let ts = 0;
-  for (const row of j) {
-    const profiles = row?.spreadProfilePrices || [];
-    const p = profiles.find((x) => x.spreadProfile === 'prime') || profiles[0];
-    if (p && p.bid > 0 && p.ask > 0) mids.push((p.bid + p.ask) / 2);
-    if (row?.ts > ts) ts = row.ts;
-  }
-  return { id: 'swissquote', name: 'Swissquote', kind: 'live', price: median(mids), ts: ts || Date.now() };
+// AwesomeAPI: { XAUUSD: { bid: "4138.1", ask: "4138.6", timestamp: "1794187079" } }
+export function parseAwesome(j) {
+  const q = j?.XAUUSD;
+  const bid = Number(q?.bid), ask = Number(q?.ask);
+  const price = bid > 0 && ask > 0 ? (bid + ask) / 2 : bid;
+  const ts = Number(q?.timestamp) * 1000 || Date.now();
+  return { id: 'awesome', name: 'AwesomeAPI', kind: 'live', price, ts };
 }
 
 // fawazahmed0 currency-api: { date: 'YYYY-MM-DD', xau: { usd: 4012.3, sar: ... } }
@@ -116,7 +114,7 @@ export function aggregate(quotes, { now = Date.now(), closedAfterMs = 30 * 60e3,
 export async function fetchSpot() {
   const jobs = [
     getJSON('https://api.gold-api.com/price/XAU').then(parseGoldApi),
-    getJSON('https://forex-data-feed.swissquote.com/public-quotes/bboquotes/instrument/XAU/USD').then(parseSwissquote),
+    getJSON('https://economia.awesomeapi.com.br/json/last/XAU-USD').then(parseAwesome),
     firstOk(CURRENCY_API.map((f) => f('latest', 'xau'))).then(parseCurrencyApiXau),
   ];
   const settled = await Promise.allSettled(jobs);

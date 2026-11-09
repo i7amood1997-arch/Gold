@@ -4,7 +4,7 @@ import {
   parseNum, gramPrice24, karatPrice, analyzeInvoice, pricePieces, sellGold, zakat,
   convertKarat, makingLevel, TROY_OUNCE_G,
 } from '../js/calc.js';
-import { aggregate, parseSwissquote, parseGoldApi, parseCurrencyApiXau } from '../js/prices.js';
+import { aggregate, parseAwesome, parseGoldApi, parseCurrencyApiXau } from '../js/prices.js';
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} ≈ ${b}`);
 
@@ -136,12 +136,9 @@ test('aggregate falls back to daily, detects closed market, breaks ties with ref
 test('source parsers', () => {
   const g = parseGoldApi({ price: 4012.5, updatedAt: '2026-11-09T11:59:00Z' });
   assert.equal(g.price, 4012.5);
-  const s = parseSwissquote([
-    { ts: 1, spreadProfilePrices: [{ spreadProfile: 'standard', bid: 3990, ask: 4010 }, { spreadProfile: 'prime', bid: 3999, ask: 4001 }] },
-    { ts: 2, spreadProfilePrices: [{ spreadProfile: 'prime', bid: 4001, ask: 4003 }] },
-  ]);
+  const s = parseAwesome({ XAUUSD: { bid: '4000.5', ask: '4001.5', timestamp: '1794187079' } });
   near(s.price, 4001);
-  assert.equal(s.ts, 2);
+  assert.equal(s.ts, 1794187079000);
   const c = parseCurrencyApiXau({ date: '2026-11-09', xau: { usd: 4000, kwd: 1228, sar: 15000 } });
   assert.equal(c.price, 4000);
   assert.equal(c.rates.kwd, 1228);

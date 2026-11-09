@@ -364,6 +364,8 @@ a { color: inherit; }
   padding: 8px 4px; margin-top: 6px;
 }
 .btn-row { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+.btn-row.spread { justify-content: space-between; }
+.add.muted { color: var(--ink-3); }
 
 .switch { display: flex; align-items: center; gap: 12px; margin-top: 14px; cursor: pointer; font-size: 0.92rem; }
 .switch input { position: absolute; opacity: 0; pointer-events: none; }
@@ -398,7 +400,7 @@ a { color: inherit; }
 .btn.ghost { background: transparent; border-color: transparent; color: var(--ink-3); }
 .btn.danger { color: var(--down); }
 .btn.block { width: 100%; margin-top: 18px; }
-.actions { display: grid; grid-template-columns: 1.3fr 1fr auto; gap: 8px; margin-top: 14px; }
+.actions { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 8px; margin-top: 14px; }
 
 /* ============================================================ results */
 
@@ -535,6 +537,7 @@ a { color: inherit; }
 .sheet-title { font-size: 1.2rem; font-weight: 600; margin: 6px 0 4px; padding-inline-end: 44px; }
 .sheet .field .label { margin-top: 14px; }
 .sheet-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 18px; }
+.sheet-actions .btn:first-child { grid-column: 1 / -1; }
 
 .toast {
   position: fixed; z-index: 60; left: 50%; bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom) + 14px);

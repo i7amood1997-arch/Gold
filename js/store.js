@@ -22,8 +22,8 @@ export function save(key, value) {
 }
 
 export const DEFAULT_SETTINGS = {
-  currency: 'SAR',
-  vatRate: 0.15,
+  currency: 'BHD',
+  vatRate: 0.1,
   vatBasis: 'full',
   defaultKarat: 21,
   adjustPct: 0,
