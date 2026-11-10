@@ -4,8 +4,9 @@ import {
 } from './calc.js';
 import { CURRENCIES, PROFILES, fetchSpot, fetchFx, fetchDay } from './prices.js';
 import { load, save, DEFAULT_SETTINGS, uid } from './store.js';
+import { ICONS } from './icons.js';
 
-export const BUILD = '2026.11.10-3';
+export const BUILD = '2026.11.10-4';
 
 /* ======================================================================
    State
@@ -69,7 +70,7 @@ function rawP24(usd = S.price?.usd, fx = fxRate()) {
   return usd > 0 && fx > 0 ? profile().p24(usd, fx) : null;
 }
 
-// Market 24K gram price (with the user's adjustment) — never the manual one.
+// Market 24K gram price (with the user's adjustment), never the manual one.
 function marketP24(usd = S.price?.usd) {
   const raw = rawP24(usd);
   return raw ? raw * (1 + (S.settings.adjustPct || 0) / 100) : null;
@@ -95,12 +96,14 @@ function nf(min, max) {
   if (!nfCache.has(key)) nfCache.set(key, new Intl.NumberFormat(loc, { minimumFractionDigits: min, maximumFractionDigits: max }));
   return nfCache.get(key);
 }
-const fmt = (n, dec = 2) => (Number.isFinite(n) ? nf(dec, dec).format(n) : '—');
-const fmtW = (n) => (Number.isFinite(n) ? nf(0, 3).format(n) : '—');
-const fmtPct = (x, dec = 1) => (Number.isFinite(x) ? `${nf(dec, dec).format(x * 100)}${S.settings.digits === 'arab' ? '٪' : '%'}` : '—');
+const fmt = (n, dec = 2) => (Number.isFinite(n) ? nf(dec, dec).format(n) : '-');
+const fmtW = (n) => (Number.isFinite(n) ? nf(0, 3).format(n) : '-');
+const pctSign = () => (S.settings.digits === 'arab' ? '٪' : '%');
+const fmtPct = (x, dec = 1) => (Number.isFinite(x) ? `${nf(dec, dec).format(x * 100)}${pctSign()}` : '-');
+const signed = (n, dec) => `${n > 0 ? '+' : n < 0 ? '-' : ''}${fmt(Math.abs(n), dec)}`;
 const num = (s) => `<span class="num">${s}</span>`;
-const money = (n, cls = '') => `<span class="money ${cls}">${num(fmt(n, cur().dec))}<span class="cur">${cur().sym}</span></span>`;
-const grams = (n) => `<span class="money">${num(fmtW(n))}<span class="cur">غ</span></span>`;
+const money = (n, dec = cur().dec) => `<span class="money">${num(fmt(n, dec))} <span class="cur">${cur().sym}</span></span>`;
+const grams = (n) => `<span class="money">${num(fmtW(n))} <span class="cur">غ</span></span>`;
 
 function dateFmt(ts, opts = { day: 'numeric', month: 'long' }) {
   const nu = S.settings.digits === 'arab' ? 'arab' : 'latn';
@@ -110,52 +113,101 @@ function dateFmt(ts, opts = { day: 'numeric', month: 'long' }) {
 function ago(ts) {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
   if (s < 10) return 'الآن';
-  if (s < 60) return `قبل ${fmt(s, 0)} ث`;
+  if (s < 60) return `قبل ${fmt(s, 0)} ثانية`;
   const m = Math.round(s / 60);
-  if (m < 60) return `قبل ${fmt(m, 0)} د`;
+  if (m < 60) return `قبل ${fmt(m, 0)} دقيقة`;
   const h = Math.round(m / 60);
-  if (h < 24) return `قبل ${fmt(h, 0)} س`;
+  if (h < 24) return `قبل ${fmt(h, 0)} ساعة`;
   return dateFmt(ts, { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
 }
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
+// Verdict wording. Colour carries the same meaning as the words, never alone.
 const LEVELS = [
-  { label: 'منخفضة', cls: 'lv0' },
-  { label: 'معقولة', cls: 'lv1' },
-  { label: 'مرتفعة', cls: 'lv2' },
-  { label: 'مرتفعة جدًا', cls: 'lv3' },
+  { label: 'منخفضة', cls: 'good' },
+  { label: 'معقولة', cls: 'neutral' },
+  { label: 'مرتفعة', cls: 'warn' },
+  { label: 'مرتفعة جدًا', cls: 'bad' },
 ];
 const SELL_LEVELS = [
-  { label: 'عرض ممتاز', cls: 'lv0' },
-  { label: 'عرض معقول', cls: 'lv1' },
-  { label: 'خصم مرتفع', cls: 'lv2' },
-  { label: 'خصم مرتفع جدًا', cls: 'lv3' },
+  { label: 'عرض ممتاز', cls: 'good' },
+  { label: 'عرض معقول', cls: 'neutral' },
+  { label: 'خصم مرتفع', cls: 'warn' },
+  { label: 'خصم مرتفع جدًا', cls: 'bad' },
 ];
 const KARAT_FINENESS = { 24: '999', 22: '916', 21: '875', 18: '750' };
 
 /* ======================================================================
-   Icons (inline, stroke = currentColor)
+   UI kit: native iOS patterns (grouped lists, segmented controls)
    ====================================================================== */
 
-const I = {
-  prices: '<path d="M4 17l5-5 4 4 7-8"/><path d="M15 8h5v5"/>',
-  calc: '<rect x="5" y="3" width="14" height="18" rx="2.5"/><path d="M8.5 7.5h7M8.5 12h.01M12 12h.01M15.5 12h.01M8.5 16h.01M12 16h.01M15.5 16h.01"/>',
-  vault: '<path d="M6 10h12l2 9H4z"/><path d="M8.5 10l1-5h5l1 5"/>',
-  tools: '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M2 12h3M19 12h3M4.9 19.1L7 17M17 7l2.1-2.1"/>',
-  refresh: '<path d="M20 11a8 8 0 1 0-2.3 5.7"/><path d="M20 4v7h-7"/>',
-  plus: '<path d="M12 5v14M5 12h14"/>',
-  x: '<path d="M6 6l12 12M18 6L6 18"/>',
-  share: '<path d="M12 3v12"/><path d="M7 8l5-5 5 5"/><path d="M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"/>',
-  save: '<path d="M6 3h12v18l-6-4-6 4z"/>',
-  trash: '<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>',
-  chevron: '<path d="M15 6l-6 6 6 6"/>',
-  check: '<path d="M5 12l5 5 9-10"/>',
-  edit: '<path d="M4 20h4L19 9l-4-4L4 16z"/>',
-  copy: '<rect x="8" y="8" width="12" height="12" rx="2.5"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>',
-  gem: '<path d="M6 4h12l3 5-9 11L3 9z"/><path d="M3 9h18M9 4l3 16 3-16"/>',
-};
-const icon = (name, size = 22) => `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${I[name]}</svg>`;
+const icon = (name, size = 22, filled = false) =>
+  `<svg class="ic" width="${size}" height="${size}" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true">${ICONS[filled && ICONS[`${name}Fill`] ? `${name}Fill` : name]}</svg>`;
+
+const navBar = (title, trailing = '') => `
+  <header class="nav">
+    <h1>${title}</h1>
+    ${trailing ? `<div class="nav-trailing">${trailing}</div>` : ''}
+  </header>`;
+
+// A grouped list section: optional header above, footer below.
+const group = (body, { head = '', foot = '', id = '', cls = '' } = {}) => `
+  <section class="group ${cls}" ${id ? `id="${id}"` : ''}>
+    ${head ? `<h2 class="group-head">${head}</h2>` : ''}
+    <div class="list">${body}</div>
+    ${foot ? `<p class="group-foot">${foot}</p>` : ''}
+  </section>`;
+
+// Label at the start, value at the end.
+const row = (label, value = '', { sub = '', cls = '', attrs = '' } = {}) => `
+  <div class="row ${cls}" ${attrs}>
+    <span class="row-label"><span>${label}</span>${sub ? `<small>${sub}</small>` : ''}</span>
+    ${value !== '' ? `<span class="row-value"><span>${value}</span></span>` : ''}
+  </div>`;
+
+// Label above, full-width control below (for segmented controls in a cell).
+const stackRow = (label, control, attrs = '') => `
+  <div class="row stack" ${attrs}>
+    ${label ? `<span class="row-label">${label}</span>` : ''}
+    ${control}
+  </div>`;
+
+const inputRow = (label, attrs, unit = '', { sub = '', placeholder = '0' } = {}) => `
+  <label class="row field">
+    <span class="row-label"><span>${label}</span>${sub ? `<small>${sub}</small>` : ''}</span>
+    <span class="row-input"><input inputmode="decimal" autocomplete="off" placeholder="${placeholder}" ${attrs}>${unit ? `<span class="unit">${unit}</span>` : ''}</span>
+  </label>`;
+
+const switchRow = (label, attrs, checked) => `
+  <label class="row">
+    <span class="row-label"><span>${label}</span></span>
+    <span class="switch"><input type="checkbox" role="switch" ${attrs} ${checked ? 'checked' : ''}><span class="track"></span></span>
+  </label>`;
+
+const actionRow = (label, attrs, { ic = '', cls = '' } = {}) => `
+  <button type="button" class="row action ${cls}" ${attrs}>
+    ${ic ? icon(ic, 20) : ''}<span>${label}</span>
+  </button>`;
+
+const linkRow = (label, value, attrs) => `
+  <button type="button" class="row link" ${attrs}>
+    <span class="row-label"><span>${label}</span></span>
+    <span class="row-value"><span>${value}</span></span>
+    ${icon('chevron', 16)}
+  </button>`;
+
+const seg = (name, options, value, cls = '') => `
+  <div class="segmented ${cls}" role="radiogroup">
+    ${options.map(([v, label]) => `<button type="button" role="radio" aria-checked="${String(v) === String(value)}" data-${name}="${v}">${label}</button>`).join('')}
+  </div>`;
+
+const karatSeg = (name, value, cls = '') => seg(name, KARATS.map((k) => [k, num(k)]), value, cls);
+
+// Updates a segmented control in place, without re-rendering the page.
+function selectSeg(btn) {
+  btn.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === btn)));
+}
 
 /* ======================================================================
    Prices: fetch, cache, poll
@@ -189,7 +241,7 @@ async function refresh({ userAsked = false } = {}) {
       if (userAsked) toast('تم تحديث السعر');
     } catch {
       S.offline = true;
-      if (userAsked) toast('تعذّر الاتصال — يُعرض آخر سعر محفوظ');
+      if (userAsked) toast('تعذّر الاتصال، يُعرض آخر سعر محفوظ');
     } finally {
       S.loading = false;
       inflight = null;
@@ -224,23 +276,21 @@ addEventListener('offline', () => { S.offline = true; paintStatus(); });
 function statusInfo() {
   const st = S.settings;
   if (st.priceMode === 'manual' && parseNum(st.manualPrice) > 0) {
-    return { cls: 'manual', text: `سعر يدوي · عيار ${st.manualKarat}` };
+    return { cls: '', text: `سعر يدوي لعيار ${num(st.manualKarat)}` };
   }
   const p = S.price;
-  if (!p) return { cls: S.loading ? 'loading' : 'off', text: S.loading ? 'جارٍ جلب السعر…' : 'لا يوجد اتصال بعد' };
-  if (S.offline) return { cls: 'off', text: `غير متصل · آخر سعر ${ago(p.fetchedAt || p.ts)}` };
-  if (p.status === 'closed') return { cls: 'closed', text: `السوق مغلق · آخر تداول ${dateFmt(p.ts, { weekday: 'long', hour: 'numeric', minute: '2-digit' })}` };
-  if (p.status === 'daily') return { cls: 'closed', text: 'سعر مرجعي يومي · المصادر المباشرة لا تستجيب' };
-  const n = p.sources?.length || 1;
-  const src = n === 2 ? 'مصدران متطابقان' : n > 2 ? `${fmt(n, 0)} مصادر متطابقة` : 'مصدر واحد';
-  return { cls: 'live', text: `مباشر · ${ago(p.fetchedAt || p.ts)} · ${src}` };
+  if (!p) return { cls: S.loading ? '' : 'bad', text: S.loading ? 'جارٍ جلب السعر' : 'لا يوجد اتصال' };
+  if (S.offline) return { cls: 'bad', text: `غير متصل. آخر سعر ${ago(p.fetchedAt || p.ts)}` };
+  if (p.status === 'closed') return { cls: '', text: `السوق مغلق. آخر تداول ${dateFmt(p.ts, { weekday: 'long', hour: 'numeric', minute: '2-digit' })}` };
+  if (p.status === 'daily') return { cls: 'warn', text: 'سعر مرجعي يومي، المصادر المباشرة لا تستجيب' };
+  return { cls: '', text: `محدث ${ago(p.fetchedAt || p.ts)}` };
 }
 
 function paintStatus() {
   const info = statusInfo();
   document.querySelectorAll('[data-status]').forEach((el) => {
     el.className = `status ${info.cls}`;
-    el.querySelector('.status-text').textContent = info.text;
+    el.innerHTML = info.text;
   });
   document.querySelectorAll('[data-action="refresh"]').forEach((b) => b.classList.toggle('spin', S.loading));
 }
@@ -256,7 +306,6 @@ function onPrice(prevUsd) {
   if (S.tab === 'calc') paintCalcResult();
   if (S.tab === 'vault') paintVault();
   if (S.tab === 'tools') { paintZakat(); paintConv(); }
-  document.querySelectorAll('[data-live-chip]').forEach((el) => { el.innerHTML = chipHTML(); });
 }
 
 /* ======================================================================
@@ -328,13 +377,13 @@ function chartPoints(k) {
   return pts;
 }
 
-// Shared by drawing and hit-testing. The right edge is reserved for the
+// Shared by drawing and hit-testing. The end edge is reserved for the
 // value labels so they never sit on top of the line.
 function chartGeom(pts, w, h) {
-  const padT = 16, padB = 22, padL = 4, padR = 46;
+  const padT = 12, padB = 24, padL = 2, padR = 44;
   const vs = pts.map((p) => p.v);
   let lo = Math.min(...vs), hi = Math.max(...vs);
-  const pad = (hi - lo) * 0.12 || hi * 0.01;
+  const pad = (hi - lo) * 0.1 || hi * 0.01;
   lo -= pad; hi += pad;
   const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
   const x = (t) => padL + ((t - t0) / (t1 - t0 || 1)) * (w - padL - padR);
@@ -342,25 +391,25 @@ function chartGeom(pts, w, h) {
   return { padT, padB, padL, padR, lo, hi, t0, t1, x, y };
 }
 
-function chartSVG(pts, w, h) {
-  const { padT, padB, padL: padX, padR, lo, hi, t0, t1, x, y } = chartGeom(pts, w, h);
+// Stocks-style: the line is green when the range closed higher, red when lower.
+function chartSVG(pts, w, h, trend) {
+  const { padB, padL, padR, lo, hi, t0, t1, x, y } = chartGeom(pts, w, h);
   const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join('');
   const area = `${line}L${x(t1).toFixed(1)},${h - padB}L${x(t0).toFixed(1)},${h - padB}Z`;
-  const last = pts[pts.length - 1];
-  const ticks = [lo + (hi - lo) * 0.2, lo + (hi - lo) * 0.8];
+  const ticks = [lo + (hi - lo) * 0.15, lo + (hi - lo) * 0.85];
   const dec = cur().dec > 2 ? 2 : 0;
+  const last = pts[pts.length - 1];
   return `
-    <svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" class="chart-svg" role="img" aria-label="منحنى السعر">
+    <svg viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" class="chart-svg ${trend}" role="img" aria-label="حركة السعر">
       <defs><linearGradient id="gfill" x1="0" x2="0" y1="0" y2="1">
-        <stop offset="0" stop-color="var(--gold)" stop-opacity=".22"/><stop offset="1" stop-color="var(--gold)" stop-opacity="0"/>
+        <stop offset="0" class="fill-a"/><stop offset="1" class="fill-b"/>
       </linearGradient></defs>
-      ${ticks.map((v) => `<line x1="0" x2="${w - padR + 4}" y1="${y(v)}" y2="${y(v)}" class="grid"/><text x="${w - 2}" y="${y(v) + 4}" class="axis" text-anchor="end">${fmt(v, dec)}</text>`).join('')}
+      ${ticks.map((v) => `<line x1="0" x2="${w - padR + 6}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="grid"/><text x="${w}" y="${(y(v) + 4).toFixed(1)}" class="axis" text-anchor="end">${fmt(v, dec)}</text>`).join('')}
       <path d="${area}" fill="url(#gfill)"/>
       <path d="${line}" class="line"/>
-      <circle cx="${x(last.t)}" cy="${y(last.v)}" r="4" class="end"/>
-      <text x="${padX}" y="${h - 6}" class="axis">${dateFmt(t0, { day: 'numeric', month: 'short' })}</text>
+      <text x="${padL}" y="${h - 6}" class="axis">${dateFmt(t0, { day: 'numeric', month: 'short' })}</text>
       <text x="${w - padR}" y="${h - 6}" class="axis" text-anchor="end">${last.live ? 'الآن' : dateFmt(t1, { day: 'numeric', month: 'short' })}</text>
-      <g class="cross" style="display:none"><line y1="${padT - 6}" y2="${h - padB}"/><circle r="5"/></g>
+      <g class="cross" style="display:none"><line y1="0" y2="${h - padB}"/><circle r="4.5"/></g>
     </svg>`;
 }
 
@@ -370,25 +419,25 @@ function paintChart() {
   const k = S.heroK || defK();
   const pts = chartPoints(k);
   const head = document.getElementById('chart-head');
-  if (head) {
-    const first = pts[0], last = pts[pts.length - 1];
-    if (pts.length > 1) {
-      const d = last.v - first.v;
-      const cls = d >= 0 ? 'up' : 'down';
-      head.innerHTML = `<span class="delta ${cls}">${d >= 0 ? '▲' : '▼'} ${num(fmt(Math.abs(d), cur().dec))} <span class="muted">(${num(fmtPct(Math.abs(d / first.v), 2))})</span></span>`;
-    } else head.innerHTML = '';
-  }
   if (pts.length < 2) {
-    box.innerHTML = `<div class="chart-empty">${histLoading ? '<span class="shimmer"></span>جارٍ تحميل السجل…' : 'لا تتوفر بيانات تاريخية حاليًا'}</div>`;
+    if (head) head.innerHTML = '';
+    box.innerHTML = `<div class="chart-empty">${histLoading ? 'جارٍ تحميل السجل' : 'لا تتوفر بيانات تاريخية حاليًا'}</div>`;
     return;
   }
-  const w = Math.max(260, Math.round(box.clientWidth || 320));
-  const h = 168;
-  box.innerHTML = `${chartSVG(pts, w, h)}<div class="tip" hidden></div>`;
+  const first = pts[0], last = pts[pts.length - 1];
+  const d = last.v - first.v;
+  const trend = d >= 0 ? 'up' : 'down';
+  const rangeLabel = (RANGES.find((r) => r.days === S.range) || RANGES[1]).label;
+  const restHead = `<span class="${trend}">${num(signed(d, cur().dec))} (${num(fmtPct(Math.abs(d / first.v), 2))})</span> <span class="muted">خلال ${rangeLabel}</span>`;
+  if (head) head.innerHTML = restHead;
+
+  const w = Math.max(260, Math.round(box.clientWidth || 340));
+  const h = 180;
+  box.innerHTML = chartSVG(pts, w, h, trend);
   const svg = box.querySelector('svg');
   const cross = svg.querySelector('.cross');
-  const tip = box.querySelector('.tip');
   const { x: X, y: Y } = chartGeom(pts, w, h);
+  // Scrubbing shows the value in the header line, like the Stocks app.
   const move = (ev) => {
     const rect = svg.getBoundingClientRect();
     const px = ((ev.clientX - rect.left) / rect.width) * w;
@@ -400,13 +449,9 @@ function paintChart() {
     cross.querySelector('line').setAttribute('x2', cx);
     cross.querySelector('circle').setAttribute('cx', cx);
     cross.querySelector('circle').setAttribute('cy', cy);
-    tip.hidden = false;
-    tip.innerHTML = `<b>${money(best.v)}</b><span>${best.live ? 'الآن' : dateFmt(best.t, { weekday: 'short', day: 'numeric', month: 'short' })}</span>`;
-    const tw = tip.offsetWidth;
-    const left = Math.min(Math.max((cx / w) * rect.width - tw / 2, 0), rect.width - tw);
-    tip.style.left = `${left}px`;
+    if (head) head.innerHTML = `${money(best.v)} <span class="muted">${best.live ? 'الآن' : dateFmt(best.t, { weekday: 'short', day: 'numeric', month: 'short' })}</span>`;
   };
-  const leave = () => { cross.style.display = 'none'; tip.hidden = true; };
+  const leave = () => { cross.style.display = 'none'; if (head) head.innerHTML = restHead; };
   svg.addEventListener('pointermove', move);
   svg.addEventListener('pointerdown', move);
   svg.addEventListener('pointerleave', leave);
@@ -430,7 +475,7 @@ function renderTabbar() {
   const nav = document.getElementById('tabbar');
   nav.innerHTML = TABS.map((t) => `
     <a href="#${t.id}" class="tab" data-tab="${t.id}" ${S.tab === t.id ? 'aria-current="page"' : ''}>
-      ${icon(t.icon, 24)}<span>${t.label}</span>
+      ${icon(t.icon, 26, S.tab === t.id)}<span>${t.label}</span>
     </a>`).join('');
 }
 
@@ -438,9 +483,6 @@ function go() {
   const id = (location.hash || '#prices').slice(1);
   S.tab = TABS.some((t) => t.id === id) ? id : 'prices';
   renderTabbar();
-  view.classList.remove('enter');
-  void view.offsetWidth;
-  view.classList.add('enter');
   ({ prices: renderPrices, calc: renderCalc, vault: renderVault, tools: renderTools })[S.tab]();
   paintStatus();
   window.scrollTo(0, 0);
@@ -453,18 +495,22 @@ function toast(msg) {
   el.textContent = msg;
   el.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 2200);
+  toastTimer = setTimeout(() => el.classList.remove('show'), 2000);
 }
 
+// iOS sheet: a nav bar with a leading cancel and an optional trailing action.
 let sheetCleanup = null;
-function openSheet(html, onMount) {
+function openSheet({ title, done = '', body }, onMount) {
   closeSheet(true);
   const root = document.getElementById('sheet-root');
   root.innerHTML = `<div class="backdrop" data-close></div>
-    <div class="sheet" role="dialog" aria-modal="true">
-      <div class="grabber"></div>
-      <button class="icon-btn sheet-x" data-close aria-label="إغلاق">${icon('x', 20)}</button>
-      ${html}
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+      <div class="sheet-bar">
+        <button type="button" class="bar-btn" data-close>${done ? 'إلغاء' : 'إغلاق'}</button>
+        <h2>${title}</h2>
+        ${done ? `<button type="button" class="bar-btn strong" data-done>${done}</button>` : '<span class="bar-btn"></span>'}
+      </div>
+      <div class="sheet-body">${body}</div>
     </div>`;
   root.classList.add('open');
   const onKey = (e) => { if (e.key === 'Escape') closeSheet(); };
@@ -480,7 +526,7 @@ function closeSheet(immediate = false) {
   if (!root.classList.contains('open')) return;
   root.classList.remove('open');
   if (immediate) root.innerHTML = '';
-  else setTimeout(() => { if (!root.classList.contains('open')) root.innerHTML = ''; }, 260);
+  else setTimeout(() => { if (!root.classList.contains('open')) root.innerHTML = ''; }, 300);
 }
 
 async function shareText(text) {
@@ -495,127 +541,93 @@ async function shareText(text) {
   }
 }
 
-const header = (title, extra = '') => `
-  <header class="top">
-    <div class="top-row">
-      <h1>${title}</h1>
-      ${extra}
-    </div>
-  </header>`;
-
-const statusLine = () => `<div class="status" data-status><i class="dot"></i><span class="status-text"></span></div>`;
-
-function chipHTML() {
-  const p = p24();
-  const k = calcK();
-  return p ? `<span class="muted">عيار ${num(k)}</span> ${money(kp(p, k))}` : '<span class="muted">لا يوجد سعر</span>';
-}
-
-const karatSeg = (name, value, extra = '') => `
-  <div class="karats" role="radiogroup" aria-label="العيار" ${extra}>
-    ${KARATS.map((k) => `<button type="button" role="radio" aria-checked="${k === value}" data-${name}="${k}">${num(k)}</button>`).join('')}
-  </div>`;
-
-const seg = (name, options, value) => `
-  <div class="seg" role="tablist">
-    ${options.map(([v, label]) => `<button type="button" role="tab" aria-selected="${String(v) === String(value)}" data-${name}="${v}">${label}</button>`).join('')}
-  </div>`;
+const statusLine = () => '<p class="status" data-status></p>';
 
 /* ======================================================================
    Prices tab
    ====================================================================== */
 
 function renderPrices() {
-  const k = S.heroK || defK();
+  const manual = S.settings.priceMode === 'manual' && parseNum(S.settings.manualPrice) > 0;
   view.innerHTML = `
-    ${header('<span class="brand"><span class="brand-mark">◆</span> عيار</span>', `<button class="icon-btn" data-action="refresh" aria-label="تحديث">${icon('refresh', 20)}</button>`)}
-    <section class="hero" id="px-hero"></section>
-    <section class="card">
-      <div class="card-head"><h2>كل العيارات</h2><span class="muted small">للغرام الواحد</span></div>
-      <div class="karat-list" id="px-list"></div>
-    </section>
-    <section class="card">
-      <div class="card-head"><h2>حركة السعر · عيار ${num(k)}</h2><div id="chart-head"></div></div>
-      ${seg('range', RANGES.map((r) => [r.days, r.label]), S.range)}
+    ${navBar('عيار', `<button type="button" class="bar-icon" data-action="refresh" aria-label="تحديث">${icon('refresh', 22)}</button>`)}
+    ${karatSeg('hk', S.heroK || defK(), 'hero-seg')}
+    <section class="quote" id="px-quote" aria-live="polite"></section>
+    <section class="chart-block">
+      <p class="chart-head" id="chart-head"></p>
       <div class="chart" id="chart" dir="ltr"></div>
+      ${seg('range', RANGES.map((r) => [r.days, r.label]), S.range, 'small')}
     </section>
-    <section class="card">
-      <div class="card-head"><h2>وحدات أخرى</h2></div>
-      <div class="units" id="px-units"></div>
-    </section>
-    <section class="card subtle" id="px-meta"></section>`;
+    ${group('<div id="px-list"></div>', { head: 'سعر الغرام لكل عيار' })}
+    ${group('<div id="px-units"></div>', { head: 'وحدات أخرى' })}
+    ${group('<div id="px-meta"></div>', { head: 'المصدر', foot: manual ? '' : 'لو كان سعر المحل اللي تتعامل معه مختلف، اكتب السعر اللي تشوفه مرة وحدة والتطبيق يتطابق معه ويتابع السوق.' })}`;
   paintPricesLive(0);
   ensureHistory();
 
   view.onclick = (e) => {
-    const t = e.target.closest('button, [data-k]');
+    const t = e.target.closest('button');
     if (!t) return;
-    if (t.dataset.action === 'refresh') refresh({ userAsked: true });
-    else if (t.dataset.hk) { S.heroK = Number(t.dataset.hk); renderPrices(); }
-    else if (t.dataset.range) { S.range = Number(t.dataset.range); save('range', S.range); renderPrices(); }
-    else if (t.dataset.action === 'calibrate') openCalibrate();
-    else if (t.dataset.action === 'go-settings') { location.hash = '#tools'; setTimeout(() => document.getElementById('settings')?.scrollIntoView({ behavior: 'smooth' }), 60); }
+    const d = t.dataset;
+    if (d.action === 'refresh') refresh({ userAsked: true });
+    else if (d.hk) { S.heroK = Number(d.hk); selectSeg(t); paintPricesLive(0); }
+    else if (d.range) { S.range = Number(d.range); save('range', S.range); selectSeg(t); paintChart(); ensureHistory(); }
+    else if (d.action === 'calibrate') openCalibrate();
+    else if (d.action === 'go-settings') { location.hash = '#tools'; setTimeout(() => document.getElementById('settings')?.scrollIntoView({ behavior: 'smooth' }), 60); }
   };
 }
 
 function paintPricesLive(dir) {
-  const hero = document.getElementById('px-hero');
-  if (!hero) return;
+  const quote = document.getElementById('px-quote');
+  if (!quote) return;
   const k = S.heroK || defK();
   const p = p24();
   const c = cur();
+  const st = S.settings;
+  const manual = st.priceMode === 'manual' && parseNum(st.manualPrice) > 0;
   let change = '';
   const daily = S.price?.daily;
-  const manual = S.settings.priceMode === 'manual' && parseNum(S.settings.manualPrice) > 0;
   if (!manual && daily?.usd && S.price?.usd) {
     const now = kp(marketP24(), k);
     const then = kp(marketP24(daily.usd), k);
     const d = now - then;
-    const cls = d >= 0 ? 'up' : 'down';
     const when = daily.date === isoDay(new Date()) ? 'اليوم' : 'منذ أمس';
-    change = `<div class="hero-change ${cls}">${d >= 0 ? '▲' : '▼'} ${num(fmt(Math.abs(d), c.dec))} <span>(${num(fmtPct(Math.abs(d / then), 2))})</span> <span class="when">${when}</span></div>`;
+    change = `<p class="quote-change"><span class="${d >= 0 ? 'up' : 'down'}">${num(signed(d, c.dec))}</span> <span class="pill ${d >= 0 ? 'up' : 'down'}">${num(`${d >= 0 ? '+' : '-'}${fmtPct(Math.abs(d / then), 2)}`)}</span> <span class="muted">${when}</span></p>`;
   }
-  hero.innerHTML = `
-    <div class="hero-eyebrow">سعر غرام الذهب عيار ${num(k)} · ${manual ? c.country : profile() === PROFILES.standard ? `${c.country} · السعر العالمي` : `تسعيرة ${profile().name}`}${!manual && S.settings.adjustPct ? ` · <span class="adj">معدّل ${num(`${S.settings.adjustPct > 0 ? '+' : ''}${fmt(S.settings.adjustPct, 2)}%`)}</span>` : ''}</div>
-    <div class="hero-price ${dir > 0 ? 'tick-up' : dir < 0 ? 'tick-down' : ''}">
-      ${p ? `${num(fmt(kp(p, k), c.dec))}<span class="cur">${c.sym}</span>` : '<span class="shimmer wide"></span>'}
-    </div>
+  const source = manual ? 'سعر يدوي' : `${profile().name}${st.adjustPct ? `، معدّل ${num(`${st.adjustPct > 0 ? '+' : ''}${fmt(st.adjustPct, 2)}${pctSign()}`)}` : ''}`;
+  quote.innerHTML = `
+    <p class="quote-label">غرام عيار ${num(k)}، ${source}</p>
+    <p class="quote-price ${dir > 0 ? 'tick-up' : dir < 0 ? 'tick-down' : ''}">${p ? `${num(fmt(kp(p, k), c.dec))}<span class="cur">${c.sym}</span>` : '<span class="skeleton"></span>'}</p>
     ${change}
-    <div class="hero-karats">
-      ${KARATS.map((x) => `<button type="button" data-hk="${x}" aria-pressed="${x === k}">${num(x)}</button>`).join('')}
-    </div>
     ${statusLine()}`;
 
-  const list = document.getElementById('px-list');
-  list.innerHTML = KARATS.map((x) => `
-    <button type="button" class="karat-row ${x === k ? 'on' : ''}" data-hk="${x}">
-      <span class="kbadge">${num(x)}</span>
-      <span class="kname">عيار ${num(x)} <span class="muted small">${num(KARAT_FINENESS[x])}</span></span>
-      <span class="kprice">${p ? money(kp(p, x)) : '—'}</span>
-    </button>`).join('');
+  document.getElementById('px-list').innerHTML = KARATS.map((x) => row(
+    `عيار ${num(x)}`,
+    p ? money(kp(p, x)) : '-',
+    { sub: `نقاوة ${num(KARAT_FINENESS[x])}`, cls: x === k ? 'current' : '' },
+  )).join('');
 
   const units = [
     ['أونصة', TROY_OUNCE_G, 24],
     ['تولة', 11.6638, 24],
     ['جنيه ذهب', 7.988, 22],
-    ['سبيكة 10 غ', 10, 24],
+    ['سبيكة 10 غرام', 10, 24],
     ['كيلو', 1000, 24],
   ];
-  document.getElementById('px-units').innerHTML = units.map(([n, g, kk]) => `
-    <div class="unit-row"><span>${n} <span class="muted small">${num(fmtW(g))} غ · ${num(kk)}</span></span><b>${p ? money(kp(p, kk) * g) : '—'}</b></div>`).join('');
+  document.getElementById('px-units').innerHTML = units.map(([n, g, kk]) => row(
+    n, p ? money(kp(p, kk) * g) : '-', { sub: `${num(fmtW(g))} غ عيار ${num(kk)}` },
+  )).join('');
 
-  const st = S.settings;
   const fx = fxRate();
-  const fxKind = c.peg ? 'سعر ربط رسمي ثابت' : S.fx[st.currency] ? `سعر السوق · ${ago(S.fx[st.currency].ts)}` : 'سعر تقريبي';
-  document.getElementById('px-meta').innerHTML = `
-    <div class="meta-row"><span>الأونصة عالميًا</span><b dir="ltr">${S.price ? `$${num(fmt(S.price.usd, 2))}` : '—'}</b></div>
-    ${st.currency !== 'USD' ? `<div class="meta-row"><span>سعر الصرف</span><b>${num(`1$ = ${fmt(fx, 4)}`)} ${c.sym} <span class="muted small">· ${fxKind}</span></b></div>` : ''}
-    ${manual ? '' : `<div class="meta-row"><span>طريقة التسعير</span><b>${profile().name}</b></div>`}
-    ${S.price?.sources?.length ? `<div class="meta-row"><span>المصادر</span><b class="small">${S.price.sources.map(esc).join(' · ')}</b></div>` : ''}
-    ${st.adjustPct ? `<div class="meta-row"><span>تعديل السعر</span><b>${num(`${st.adjustPct > 0 ? '+' : ''}${fmt(st.adjustPct, 2)}٪`)}</b></div>` : ''}
-    ${manual ? `<p class="note">تستخدم سعرًا يدويًا: ${money(parseNum(st.manualPrice))} لغرام عيار ${num(st.manualKarat)}.</p>` : ''}
-    ${manual ? '' : `<button class="calib" data-action="calibrate">${icon('edit', 18)}<span><b>السعر مختلف عن المحل أو الحساب اللي تتابعه؟</b><span class="muted small">اكتب السعر اللي تشوفه مرة وحدة، ويتطابق التطبيق معه ويتابع السوق مباشرة</span></span></button>`}
-    <button class="link" data-action="go-settings">تغيير العملة أو مصدر السعر ←</button>`;
+  const fxKind = c.peg ? 'ربط رسمي ثابت' : S.fx[st.currency] ? `سعر السوق، ${ago(S.fx[st.currency].ts)}` : 'سعر تقريبي';
+  const nSrc = S.price?.sources?.length || 0;
+  document.getElementById('px-meta').innerHTML = [
+    manual
+      ? row('السعر اليدوي', money(parseNum(st.manualPrice)), { sub: `لغرام عيار ${num(st.manualKarat)}` })
+      : linkRow('طريقة التسعير', profile().name, 'data-action="go-settings"'),
+    row('الأونصة عالميًا', S.price ? `<span class="num">$${fmt(S.price.usd, 2)}</span>` : '-', { sub: nSrc ? (nSrc === 2 ? 'من مصدرين متطابقين' : nSrc > 2 ? `من ${fmt(nSrc, 0)} مصادر متطابقة` : 'من مصدر واحد') : '' }),
+    st.currency !== 'USD' ? row('سعر الصرف', `${num(`1$ = ${fmt(fx, 4)}`)} ${c.sym}`, { sub: fxKind }) : '',
+    manual ? '' : actionRow('مطابقة السعر مع محل', 'data-action="calibrate"', { ic: 'edit' }),
+  ].join('');
   paintStatus();
   paintChart();
 }
@@ -624,7 +636,7 @@ function paintPricesLive(dir) {
    Calibrate: match a local shop / account price
    ====================================================================== */
 
-// Local dealers quote the global price plus (or minus) their own margin.
+// Local dealers quote the market price plus (or minus) their own margin.
 // The user types one price they trust; we store the gap as a percentage so
 // the app keeps following the live market with that same margin.
 function openCalibrate() {
@@ -633,30 +645,30 @@ function openCalibrate() {
   const raw24 = () => rawP24();
   if (!raw24()) return toast('انتظر حتى يصل السعر المباشر أولًا');
   const had = S.settings.adjustPct;
-  openSheet(`
-    <h2 class="sheet-title">طابق السعر</h2>
-    <p class="note">اكتب سعر الغرام كما تشوفه <b>الآن</b> في المحل أو الحساب اللي تثق فيه. التطبيق يحسب الفرق عن «${profile().name}» ويطبّقه على كل العيارات، ويبقى السعر يتحرك مع السوق.</p>
-    <span class="label">العيار</span>
-    ${karatSeg('ck', k)}
-    <label class="field"><span class="label">السعر اللي تشوفه لغرام عيار <span data-c="k">${num(k)}</span></span>
-      <span class="input big"><input inputmode="decimal" autocomplete="off" data-c="v" placeholder="0.000"><span class="unit">${c.sym}</span></span></label>
-    <div class="cal-out" data-c="out"></div>
-    <button class="btn primary block" data-c="ok">${icon('check', 18)} طابق</button>
-    ${had ? `<button class="btn ghost block" data-c="reset">الرجوع لـ«${profile().name}» بدون تعديل (الحالي ${num(`${had > 0 ? '+' : ''}${fmt(had, 2)}%`)})</button>` : ''}`,
-  (sheet) => {
+  openSheet({
+    title: 'مطابقة السعر',
+    done: 'تطبيق',
+    body: `
+      <p class="sheet-intro">اكتب سعر الغرام كما تشوفه الآن في المحل أو الحساب اللي تثق فيه. التطبيق يحسب الفرق عن «${profile().name}» ويطبقه على كل العيارات.</p>
+      ${group(`
+        ${stackRow('العيار', karatSeg('ck', k))}
+        ${inputRow(`سعر غرام عيار <span data-c="k">${num(k)}</span>`, 'data-c="v"', c.sym, { placeholder: fmt(kp(raw24(), k), c.dec) })}
+      `)}
+      ${group('<div data-c="out"></div>', { foot: '<span data-c="warn"></span>' })}
+      ${had ? group(actionRow(`إلغاء التعديل الحالي (${num(`${had > 0 ? '+' : ''}${fmt(had, 2)}${pctSign()}`)})`, 'data-c="reset"', { cls: 'destructive' })) : ''}`,
+  }, (sheet) => {
     const input = sheet.querySelector('[data-c="v"]');
     const out = sheet.querySelector('[data-c="out"]');
+    const warn = sheet.querySelector('[data-c="warn"]');
     const pct = () => {
       const v = parseNum(input.value);
       return v > 0 ? (v / kp(raw24(), k) - 1) * 100 : NaN;
     };
     const paint = () => {
-      const market = kp(raw24(), k);
       const p = pct();
-      out.innerHTML = `
-        <div class="meta-row"><span>${profile().name} الآن لعيار ${num(k)}</span><b>${money(market)}</b></div>
-        ${Number.isFinite(p) ? `<div class="meta-row"><span>الفرق</span><b class="${Math.abs(p) > 5 ? 'down' : ''}">${num(`${p > 0 ? '+' : ''}${fmt(p, 2)}%`)}</b></div>
-        ${Math.abs(p) > 5 ? '<p class="note warn-text">الفرق كبير — تأكد من العيار، وإن السعر للغرام الواحد وبالدينار.</p>' : ''}` : ''}`;
+      out.innerHTML = row(`${profile().name} الآن`, money(kp(raw24(), k)))
+        + row('الفرق', Number.isFinite(p) ? num(`${p > 0 ? '+' : ''}${fmt(p, 2)}${pctSign()}`) : '-', { cls: Number.isFinite(p) && Math.abs(p) > 5 ? 'bad' : '' });
+      warn.textContent = Number.isFinite(p) && Math.abs(p) > 5 ? 'الفرق كبير. تأكد من العيار وإن السعر للغرام الواحد.' : '';
     };
     paint();
     input.focus({ preventScroll: true });
@@ -666,16 +678,17 @@ function openCalibrate() {
       if (!b) return;
       if (b.dataset.ck) {
         k = Number(b.dataset.ck);
-        sheet.querySelectorAll('[data-ck]').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+        selectSeg(b);
         sheet.querySelector('[data-c="k"]').innerHTML = num(k);
+        input.placeholder = fmt(kp(raw24(), k), c.dec);
         paint();
-      } else if (b.dataset.c === 'ok') {
+      } else if (b.dataset.done !== undefined) {
         const p = pct();
         if (!Number.isFinite(p)) return toast('اكتب السعر أولًا');
-        if (Math.abs(p) > 20) return toast('الفرق أكبر من 20% — تأكد من السعر');
+        if (Math.abs(p) > 20) return toast('الفرق أكبر من 20%، تأكد من السعر');
         setSetting('adjustPct', String(Math.round(p * 10000) / 10000), false);
         closeSheet();
-        toast(`تم — الفرق ${p > 0 ? '+' : ''}${fmt(p, 2)}% ويتابع السوق مباشرة`);
+        toast(`تمت المطابقة، الفرق ${p > 0 ? '+' : ''}${fmt(p, 2)}%`);
         rerenderCurrent();
       } else if (b.dataset.c === 'reset') {
         setSetting('adjustPct', '0', false);
@@ -704,9 +717,9 @@ const MODES = [
   ['sell', 'بيع ذهب'],
 ];
 const MAKING_MODES = [
-  ['perGram', 'لكل غرام'],
+  ['perGram', 'للغرام'],
   ['total', 'مبلغ كلي'],
-  ['percent', 'نسبة ٪'],
+  ['percent', 'نسبة'],
 ];
 
 const calcK = () => S.calc.items.find((i) => i.k)?.k || defK();
@@ -727,87 +740,52 @@ function renderCalc() {
   const C = S.calc;
   C.items.forEach((it) => { if (!it.k) it.k = defK(); });
   const c = cur();
-  const vatLabel = `${fmt(S.settings.vatRate * 100, 0)}٪`;
-  const mLabel = C.makingMode === 'percent' ? 'المصنعية ٪' : C.makingMode === 'total' ? 'المصنعية الكلية' : 'المصنعية / غ';
-  const mUnit = C.makingMode === 'percent' ? '٪' : c.sym;
+  const multi = C.items.length > 1;
+  const mLabel = C.makingMode === 'percent' ? 'نسبة المصنعية' : C.makingMode === 'total' ? 'المصنعية الكلية' : 'المصنعية للغرام';
+  const mUnit = C.makingMode === 'percent' ? pctSign() : c.sym;
+  const P = p24();
 
   view.innerHTML = `
-    ${header('الحاسبة', `<div class="chip" data-live-chip>${chipHTML()}</div>`)}
+    ${navBar('الحاسبة', '<button type="button" class="bar-btn" data-action="clear">مسح</button>')}
     ${seg('mode', MODES, C.mode)}
     <p class="lead">${{
-      analyze: 'أدخل وزن القطعة والمبلغ المكتوب في الفاتورة، وتعرف كم دفعت مصنعية.',
-      price: 'أدخل الوزن والمصنعية التي يطلبها المحل، وتعرف السعر النهائي قبل الدفع.',
+      analyze: 'من وزن القطعة والمبلغ المكتوب في الفاتورة، تعرف كم دفعت مصنعية.',
+      price: 'من الوزن والمصنعية اللي يطلبها المحل، تعرف السعر النهائي قبل الدفع.',
       sell: 'تعرف قيمة ذهبك بسعر السوق، وكم يخصم المحل من عرضه.',
     }[C.mode]}</p>
 
-    <section class="card">
-      <div id="items">
-        ${C.items.map((it, i) => `
-          <div class="item" data-i="${i}">
-            <div class="item-head">
-              <span class="item-n">${C.items.length > 1 ? `القطعة ${num(i + 1)}` : 'القطعة'}</span>
-              ${C.items.length > 1 ? `<button class="icon-btn sm" data-rm="${i}" aria-label="حذف القطعة">${icon('x', 16)}</button>` : ''}
-            </div>
-            <div class="row2">
-              <label class="field">
-                <span class="label">الوزن</span>
-                <span class="input"><input inputmode="decimal" autocomplete="off" placeholder="0.00" data-f="w" value="${esc(it.w)}"><span class="unit">غ</span></span>
-              </label>
-              ${C.mode === 'price' ? `
-              <label class="field">
-                <span class="label">${mLabel}</span>
-                <span class="input"><input inputmode="decimal" autocomplete="off" placeholder="0" data-f="m" value="${esc(it.m)}"><span class="unit">${mUnit}</span></span>
-              </label>` : ''}
-            </div>
-            ${karatSeg('k', it.k)}
-          </div>`).join('')}
-      </div>
-      <div class="btn-row spread">
-        <button class="add" data-action="add">${icon('plus', 18)} إضافة قطعة أخرى</button>
-        <button class="add muted" data-action="clear">مسح الكل</button>
-      </div>
-    </section>
+    ${C.items.map((it, i) => group(`
+      ${inputRow('الوزن', `data-f="w" value="${esc(it.w)}"`, 'غ', { placeholder: '0.00' })}
+      ${stackRow('', karatSeg('k', it.k))}
+      ${C.mode === 'price' ? inputRow(mLabel, `data-f="m" value="${esc(it.m)}"`, mUnit) : ''}
+    `, {
+      head: multi ? `<span>القطعة ${num(i + 1)}</span><button type="button" class="head-btn" data-rm="${i}">حذف</button>` : 'القطعة',
+      cls: 'item',
+      id: `item-${i}`,
+    }).replace('class="group item', `data-i="${i}" class="group item`)).join('')}
+    ${group(actionRow('إضافة قطعة', 'data-action="add"', { ic: 'plus' }))}
 
-    <section class="card">
-      ${C.mode === 'analyze' ? `
-        <label class="field">
-          <span class="label">المبلغ الإجمالي في الفاتورة</span>
-          <span class="input big"><input inputmode="decimal" autocomplete="off" placeholder="0.00" data-g="total" value="${esc(C.total)}"><span class="unit">${c.sym}</span></span>
-        </label>
-        ${vatOn() ? `<label class="switch"><input type="checkbox" data-g="vatIncluded" ${C.vatIncluded ? 'checked' : ''}><span class="track"></span><span>المبلغ شامل ضريبة ${vatLabel}</span></label>` : ''}
-      ` : ''}
-      ${C.mode === 'price' ? `
-        <span class="label">طريقة حساب المصنعية</span>
-        ${seg('mm', MAKING_MODES, C.makingMode)}
-      ` : ''}
-      ${C.mode === 'sell' ? `
-        <label class="field">
-          <span class="label">المبلغ الذي عرضه المحل <span class="muted">(اختياري)</span></span>
-          <span class="input big"><input inputmode="decimal" autocomplete="off" placeholder="0.00" data-g="offer" value="${esc(C.offer)}"><span class="unit">${c.sym}</span></span>
-        </label>
-      ` : ''}
-      <details class="override" ${C.override ? 'open' : ''}>
-        <summary>المحل يستخدم سعر ذهب مختلف؟</summary>
-        <label class="field">
-          <span class="label">سعر غرام عيار ${num(calcK())} عند المحل</span>
-          <span class="input"><input inputmode="decimal" autocomplete="off" placeholder="${p24() ? fmt(kp(p24(), calcK()), c.dec) : ''}" data-g="override" value="${esc(C.override)}"><span class="unit">${c.sym}</span></span>
-        </label>
-      </details>
-    </section>
+    ${group(`
+      ${C.mode === 'analyze' ? inputRow('مبلغ الفاتورة', `data-g="total" value="${esc(C.total)}"`, c.sym, { placeholder: '0.00' }) : ''}
+      ${C.mode === 'analyze' && vatOn() ? switchRow(`شامل الضريبة ${num(fmt(S.settings.vatRate * 100, 0) + pctSign())}`, 'data-g="vatIncluded"', C.vatIncluded) : ''}
+      ${C.mode === 'price' ? stackRow('المصنعية محسوبة', seg('mm', MAKING_MODES, C.makingMode)) : ''}
+      ${C.mode === 'sell' ? inputRow('عرض المحل', `data-g="offer" value="${esc(C.offer)}"`, c.sym, { sub: 'اختياري', placeholder: '0.00' }) : ''}
+      ${inputRow(`سعر المحل لعيار <span data-ovk>${num(calcK())}</span>`, `data-g="override" value="${esc(C.override)}"`, c.sym, { sub: 'اختياري', placeholder: P ? fmt(kp(P, calcK()), c.dec) : '0.00' })}
+    `, { foot: 'اترك سعر المحل فاضي ليُستخدم السعر الحالي.' })}
 
     <section class="result" id="result" aria-live="polite"></section>
 
     <div class="actions">
-      <button class="btn primary" data-action="save">${icon('save', 18)} حفظ</button>
-      <button class="btn" data-action="share">${icon('share', 18)} صورة</button>
-      <button class="btn" data-action="copy">${icon('copy', 18)} نسخ</button>
+      <button type="button" class="btn filled" data-action="save">${icon('save', 20)} حفظ</button>
+      <button type="button" class="btn tinted" data-action="share">${icon('image', 20)} صورة</button>
+      <button type="button" class="btn tinted" data-action="copy">${icon('copy', 20)} نسخ</button>
     </div>`;
   paintCalcResult();
 
   view.oninput = (e) => {
     const t = e.target;
-    const row = t.closest('.item');
-    if (row && t.dataset.f) C.items[row.dataset.i][t.dataset.f] = t.value;
+    const item = t.closest('[data-i]');
+    if (item && t.dataset.f) C.items[item.dataset.i][t.dataset.f] = t.value;
     else if (t.dataset.g === 'vatIncluded') C.vatIncluded = t.checked;
     else if (t.dataset.g) C[t.dataset.g] = t.value;
     persistCalc();
@@ -816,16 +794,16 @@ function renderCalc() {
   view.onclick = (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    const row = b.closest('.item');
+    const item = b.closest('[data-i]');
     if (b.dataset.mode) { C.mode = b.dataset.mode; persistCalc(); renderCalc(); }
     else if (b.dataset.mm) { C.makingMode = b.dataset.mm; persistCalc(); renderCalc(); }
-    else if (b.dataset.k && row) {
-      C.items[row.dataset.i].k = Number(b.dataset.k);
+    else if (b.dataset.k && item) {
+      C.items[item.dataset.i].k = Number(b.dataset.k);
       persistCalc();
-      row.querySelectorAll('[data-k]').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
-      const ov = view.querySelector('.override .label');
-      if (ov) ov.innerHTML = `سعر غرام عيار ${num(calcK())} عند المحل`;
-      view.querySelector('[data-live-chip]').innerHTML = chipHTML();
+      selectSeg(b);
+      view.querySelector('[data-ovk]').innerHTML = num(calcK());
+      const P2 = p24();
+      if (P2) view.querySelector('[data-g="override"]').placeholder = fmt(kp(P2, calcK()), cur().dec);
       paintCalcResult();
     }
     else if (b.dataset.rm) { C.items.splice(Number(b.dataset.rm), 1); persistCalc(); renderCalc(); }
@@ -860,96 +838,75 @@ function calcResult() {
   return sellGold({ ...base, offer: C.offer });
 }
 
-function gauge(pct, max = 0.25) {
-  const pos = Math.min(Math.max(pct / max, 0), 1) * 100;
-  return `<div class="gauge" aria-hidden="true"><span class="g0"></span><span class="g1"></span><span class="g2"></span><span class="g3"></span><i style="inset-inline-start:${pos}%"></i></div>`;
-}
-
-function resultHTML(mode, r, P, override) {
-  const c = cur(), st = S.settings;
-  const k = r.rows?.[0]?.k;
-  const rows = (pairs) => `<dl class="rows">${pairs.filter(Boolean).map(([a, b, cls = '']) => `<div class="${cls}"><dt>${a}</dt><dd>${b}</dd></div>`).join('')}</dl>`;
-  const goldLine = ['قيمة الذهب', money(r.gold)];
-  const wLine = ['الوزن', `${grams(r.weight)} <span class="muted small">· صافي ${num(fmtW(r.pure))} غ عيار 24</span>`];
-  const vatName = `الضريبة ${fmt(st.vatRate * 100, 0)}٪${st.vatBasis === 'making' ? ' (على المصنعية)' : ''}`;
-  const src = override ? '<p class="note">محسوب على سعر المحل الذي أدخلته.</p>' : '';
+function resultHTML(mode, r, override) {
+  const st = S.settings;
+  const vatName = `الضريبة ${num(fmt(st.vatRate * 100, 0) + pctSign())}${st.vatBasis === 'making' ? ' على المصنعية' : ''}`;
+  const wRow = row('الوزن', grams(r.weight), { sub: `فيه ${num(fmtW(r.pure))} غ ذهب صافي` });
+  const goldRow = row('قيمة الذهب', money(r.gold));
+  const foot = override ? 'محسوب على سعر المحل اللي كتبته.' : '';
+  const headline = (label, value, verdict = '') => `
+    <div class="result-head">
+      <p class="result-label">${label}</p>
+      <p class="result-value">${value}</p>
+      ${verdict}
+    </div>`;
+  const verdictLine = (lv, text) => `<p class="verdict ${lv.cls}">${text}</p>`;
 
   if (mode === 'analyze') {
     if (r.belowGold) {
-      return `<div class="res-hero warn"><div class="res-label">المبلغ أقل من قيمة الذهب</div>
-        <p>المبلغ المدخل أقل من قيمة ${grams(r.weight)} بسعر اليوم (${money(r.gold)}). تأكد من العيار والوزن، أو أن الفاتورة قديمة.</p></div>${rows([wLine, goldLine])}`;
+      return `${headline('المبلغ أقل من قيمة الذهب', money(r.gold), `<p class="verdict warn">قيمة ${grams(r.weight)} بسعر اليوم أعلى من المبلغ. تأكد من العيار والوزن، أو إن الفاتورة قديمة.</p>`)}
+        ${group(wRow + goldRow)}`;
     }
     const lv = LEVELS[r.level];
-    return `
-      <div class="res-hero">
-        <div class="res-label">دفعت مصنعية لكل غرام</div>
-        <div class="res-big">${money(r.makingPerGram)}</div>
-        <div class="pill ${lv.cls}">${lv.label} · ${num(fmtPct(r.makingPct))} من قيمة الذهب</div>
-        ${gauge(r.makingPct)}
-      </div>
-      ${rows([
-        wLine, goldLine,
-        ['المصنعية الكلية', money(r.making), 'em'],
-        vatOn() && [vatName, money(r.vat)],
-        ['الإجمالي', money(r.paid), 'total'],
-      ])}${src}`;
+    return `${headline('دفعت مصنعية للغرام', money(r.makingPerGram), verdictLine(lv, `مصنعية ${lv.label}، ${num(fmtPct(r.makingPct))} من قيمة الذهب`))}
+      ${group([
+        wRow, goldRow,
+        row('المصنعية الكلية', money(r.making)),
+        vatOn() ? row(vatName, money(r.vat)) : '',
+        row('الإجمالي', money(r.paid), { cls: 'total' }),
+      ].join(''), { foot })}`;
   }
   if (mode === 'price') {
-    const multi = r.rows.length > 1;
-    return `
-      <div class="res-hero">
-        <div class="res-label">السعر النهائي${vatOn() ? ' شامل الضريبة' : ''}</div>
-        <div class="res-big">${money(r.total)}</div>
-        ${r.making > 0 ? `<div class="pill ${LEVELS[r.level].cls}">مصنعية ${LEVELS[r.level].label} · ${num(fmtPct(r.makingPct))}</div>${gauge(r.makingPct)}` : ''}
-      </div>
-      ${multi ? `<div class="pieces">${r.rows.map((x, i) => `<div><span>القطعة ${num(i + 1)} · ${num(fmtW(x.w))} غ · عيار ${num(x.k)}</span><b>${money(x.subtotal)}</b></div>`).join('')}</div>` : ''}
-      ${rows([
-        wLine, goldLine,
-        ['المصنعية', `${money(r.making)}${r.weight ? ` <span class="muted small">(${num(fmt(r.makingPerGram, c.dec))}/غ)</span>` : ''}`, 'em'],
-        vatOn() && [vatName, money(r.vat)],
-        ['الإجمالي', money(r.total), 'total'],
-      ])}${src}`;
+    const lv = LEVELS[r.level];
+    const pieces = r.rows.length > 1 ? group(r.rows.map((x, i) => row(`القطعة ${num(i + 1)}`, money(x.subtotal), { sub: `${num(fmtW(x.w))} غ عيار ${num(x.k)}` })).join(''), { head: 'القطع' }) : '';
+    return `${headline(`السعر النهائي${vatOn() ? ' شامل الضريبة' : ''}`, money(r.total), r.making > 0 ? verdictLine(lv, `مصنعية ${lv.label}، ${num(fmtPct(r.makingPct))} من قيمة الذهب`) : '')}
+      ${pieces}
+      ${group([
+        wRow, goldRow,
+        row('المصنعية', money(r.making), { sub: r.weight ? `${num(fmt(r.makingPerGram, cur().dec))} للغرام` : '' }),
+        vatOn() ? row(vatName, money(r.vat)) : '',
+        row('الإجمالي', money(r.total), { cls: 'total' }),
+      ].join(''), { foot })}`;
   }
-  // sell
   if (r.offer == null) {
-    return `
-      <div class="res-hero">
-        <div class="res-label">قيمة ذهبك بسعر السوق الآن</div>
-        <div class="res-big">${money(r.gold)}</div>
-        <div class="muted small">أدخل عرض المحل لتعرف كم يخصم</div>
-      </div>
-      ${rows([wLine, ['متوسط سعر الغرام', money(r.gold / r.weight)]])}${src}`;
+    return `${headline('قيمة ذهبك بسعر السوق', money(r.gold), '<p class="verdict neutral">اكتب عرض المحل لتعرف كم يخصم.</p>')}
+      ${group(wRow + row('متوسط سعر الغرام', money(r.gold / r.weight)), { foot })}`;
   }
-  const lv = SELL_LEVELS[Math.max(r.level, 0)];
   const neg = r.deduction < 0;
-  return `
-    <div class="res-hero">
-      <div class="res-label">${neg ? 'العرض أعلى من سعر السوق' : 'المحل يخصم لكل غرام'}</div>
-      <div class="res-big">${money(Math.abs(r.deductionPerGram))}</div>
-      ${neg ? '<div class="pill lv0">عرض ممتاز</div>' : `<div class="pill ${lv.cls}">${lv.label} · ${num(fmtPct(r.deductionPct))}</div>`}
-    </div>
-    ${rows([
-      wLine, ['قيمة الذهب بسعر السوق', money(r.gold)],
-      ['عرض المحل', money(r.offer)],
-      ['الفرق', money(Math.abs(r.deduction)), 'em'],
-    ])}${src}`;
+  const lv = neg ? SELL_LEVELS[0] : SELL_LEVELS[Math.max(r.level, 0)];
+  return `${headline(neg ? 'العرض أعلى من سعر السوق للغرام' : 'المحل يخصم للغرام', money(Math.abs(r.deductionPerGram)), verdictLine(lv, neg ? 'عرض ممتاز' : `${lv.label}، ${num(fmtPct(r.deductionPct))} من قيمة الذهب`))}
+    ${group([
+      wRow,
+      row('قيمة الذهب بسعر السوق', money(r.gold)),
+      row('عرض المحل', money(r.offer)),
+      row('الفرق', money(Math.abs(r.deduction)), { cls: 'total' }),
+    ].join(''), { foot })}`;
 }
 
 function paintCalcResult() {
   const box = document.getElementById('result');
   if (!box) return;
   const C = S.calc;
-  const P = calcP24();
-  if (!P) {
-    box.innerHTML = `<div class="empty">لا يتوفر سعر للذهب بعد. تحقق من الاتصال أو أدخل سعرًا يدويًا من «أدوات».</div>`;
+  if (!calcP24()) {
+    box.innerHTML = '<p class="empty-hint">لا يتوفر سعر للذهب بعد. تحقق من الاتصال، أو اكتب سعر المحل أعلاه.</p>';
     return;
   }
   const r = calcResult();
   if (!r) {
-    box.innerHTML = `<div class="empty">${C.mode === 'analyze' ? 'أدخل الوزن والمبلغ لتظهر المصنعية هنا' : 'أدخل الوزن لتظهر النتيجة هنا'}</div>`;
+    box.innerHTML = `<p class="empty-hint">${C.mode === 'analyze' ? 'اكتب الوزن ومبلغ الفاتورة لتظهر المصنعية هنا.' : 'اكتب الوزن لتظهر النتيجة هنا.'}</p>`;
     return;
   }
-  box.innerHTML = resultHTML(C.mode, r, P, parseNum(C.override) > 0);
+  box.innerHTML = resultHTML(C.mode, r, parseNum(C.override) > 0);
 }
 
 // One summary feeds both the text and the image share.
@@ -963,13 +920,13 @@ function summary(e) {
   const out = {
     title: { analyze: 'تحليل فاتورة ذهب', price: 'تسعير قطعة ذهب', sell: 'تقييم بيع ذهب' }[e.mode],
     shop: e.shop || '',
-    pieces: items.map((it) => `${fmtW(parseNum(it.w))} غ · عيار ${it.k}`),
+    pieces: items.map((it) => `${fmtW(parseNum(it.w))} غ عيار ${it.k}`),
     hero: null,
     rows: [['قيمة الذهب', m(r.gold)]],
-    foot: `سعر غرام عيار ${k}: ${m(karatPrice(e.p24, k, e.ratios || ratios()))} · ${dateFmt(e.ts || Date.now(), { day: 'numeric', month: 'long', year: 'numeric' })}`,
+    foot: `سعر غرام عيار ${k} وقتها: ${m(karatPrice(e.p24, k, e.ratios || ratios()))}`,
   };
   if (e.mode === 'analyze' && !r.belowGold) {
-    out.hero = ['المصنعية لكل غرام', m(r.makingPerGram), `${LEVELS[r.level].label} · ${fmtPct(r.makingPct)} من قيمة الذهب`];
+    out.hero = ['المصنعية للغرام', m(r.makingPerGram), `مصنعية ${LEVELS[r.level].label}، ${fmtPct(r.makingPct)} من قيمة الذهب`];
     out.rows.push(['المصنعية الكلية', m(r.making)]);
     if (r.vat) out.rows.push([vatName, m(r.vat)]);
     out.rows.push(['الإجمالي', m(r.paid)]);
@@ -990,65 +947,58 @@ function summary(e) {
 
 function describe(e) {
   const s = summary(e);
-  const lines = [`${s.title}${s.shop ? ` — ${s.shop}` : ''}`];
+  const lines = [`${s.title}${s.shop ? `، ${s.shop}` : ''}`];
   s.pieces.forEach((p) => lines.push(`• ${p}`));
   if (s.hero) lines.push(`${s.hero[0]}: ${s.hero[1]}${s.hero[2] ? ` (${s.hero[2]})` : ''}`);
   s.rows.forEach(([a, b]) => lines.push(`${a}: ${b}`));
-  lines.push(s.foot, '— عيار · حاسبة الذهب');
+  lines.push(s.foot, 'عيار، حاسبة الذهب');
   return lines.join('\n');
 }
 
-// Draws the result as a "display case" card, 2x for crisp text on phones.
+// The shared image is a plain receipt: white, black type, hairlines.
 async function shareImage(e) {
   const s = summary(e);
-  const FONT = "'IBM Plex Sans Arabic', sans-serif";
-  try {
-    await Promise.all(['400', '600'].map((w) => document.fonts.load(`${w} 20px ${FONT}`, 'عيار 0123')));
-  } catch { /* fall back to system font */ }
-  const W = 720, PAD = 48, rowH = 58;
-  const H = 230 + (s.hero ? 170 : 0) + s.rows.length * rowH + 110;
+  const FONT = "-apple-system, 'SF Arabic', system-ui, 'Segoe UI', Tahoma, sans-serif";
+  const W = 720, PAD = 56, rowH = 64;
+  const H = 250 + (s.hero ? 204 : 0) + s.rows.length * rowH + 120;
   const c = document.createElement('canvas');
   c.width = W * 2; c.height = H * 2;
   const x = c.getContext('2d');
   x.scale(2, 2);
   x.direction = 'rtl';
-  const font = (size, w = 400) => { x.font = `${w} ${size}px ${FONT}`; };
-  const text = (t, px, py, color, size, w = 400, align = 'right') => { font(size, w); x.fillStyle = color; x.textAlign = align; x.fillText(t, px, py); };
-  const rr = (px, py, w, h, r) => { x.beginPath(); x.roundRect(px, py, w, h, r); };
+  const text = (t, px, py, color, size, w = 400, align = 'right') => {
+    x.font = `${w} ${size}px ${FONT}`; x.fillStyle = color; x.textAlign = align; x.fillText(t, px, py);
+  };
+  const hair = (py) => { x.fillStyle = '#e5e5ea'; x.fillRect(PAD, py, W - PAD * 2, 1); };
 
-  const g = x.createLinearGradient(0, 0, 0, H);
-  g.addColorStop(0, '#2b2720'); g.addColorStop(1, '#16140f');
-  x.beginPath(); x.rect(0, 0, W, H); x.fillStyle = g; x.fill(); // square: chat apps paint transparent corners black
-  const glow = x.createRadialGradient(W, 0, 0, W, 0, W * 0.9);
-  glow.addColorStop(0, 'rgba(226,181,82,0.22)'); glow.addColorStop(1, 'rgba(226,181,82,0)');
-  x.fillStyle = glow; x.fill();
-
-  let y = 78;
-  text('◆ عيار', W - PAD, y, '#e2b552', 26, 600);
-  text(dateFmt(e.ts || Date.now(), { day: 'numeric', month: 'long', year: 'numeric' }), PAD, y, '#b8af9d', 18, 400, 'left');
-  y += 56;
-  text(s.title + (s.shop ? ` · ${s.shop}` : ''), W - PAD, y, '#f5efe2', 30, 600);
-  y += 40;
-  text(s.pieces.join('  ·  '), W - PAD, y, '#b8af9d', 20);
-  y += 34;
-
+  x.fillStyle = '#ffffff'; x.fillRect(0, 0, W, H);
+  let y = 84;
+  text('عيار', W - PAD, y, '#000000', 30, 700);
+  text(dateFmt(e.ts || Date.now(), { day: 'numeric', month: 'long', year: 'numeric' }), PAD, y, '#8e8e93', 20, 400, 'left');
+  y += 62;
+  text(s.title + (s.shop ? `، ${s.shop}` : ''), W - PAD, y, '#000000', 30, 600);
+  y += 42;
+  text(s.pieces.join('   '), W - PAD, y, '#8e8e93', 21);
+  y += 36;
   if (s.hero) {
-    rr(PAD, y, W - PAD * 2, 140, 24); x.fillStyle = 'rgba(255,255,255,0.06)'; x.fill();
-    text(s.hero[0], W / 2, y + 40, '#b8af9d', 20, 400, 'center');
-    text(s.hero[1], W / 2, y + 96, '#e2b552', 50, 600, 'center');
-    if (s.hero[2]) text(s.hero[2], W / 2, y + 128, '#b8af9d', 17, 400, 'center');
-    y += 170;
+    hair(y); y += 58;
+    text(s.hero[0], W - PAD, y, '#8e8e93', 22);
+    y += 70;
+    text(s.hero[1], W - PAD, y, '#000000', 58, 700);
+    if (s.hero[2]) text(s.hero[2], W - PAD, y + 40, '#3c3c43', 20);
+    y += s.hero[2] ? 76 : 40;
   }
+  hair(y);
   s.rows.forEach(([a, b], i) => {
     const last = i === s.rows.length - 1;
-    text(a, W - PAD, y + 34, last ? '#f5efe2' : '#b8af9d', 21, last ? 600 : 400);
-    text(b, PAD, y + 34, '#f5efe2', 23, 600, 'left');
-    if (!last) { x.fillStyle = 'rgba(255,255,255,0.08)'; x.fillRect(PAD, y + rowH - 1, W - PAD * 2, 1); }
+    text(a, W - PAD, y + 42, last ? '#000000' : '#3c3c43', 23, last ? 600 : 400);
+    text(b, PAD, y + 42, '#000000', 24, last ? 700 : 500, 'left');
     y += rowH;
+    if (!last) hair(y);
   });
-  y += 40;
-  text(s.foot, W / 2, y, '#8f8778', 16, 400, 'center');
-  text('الأسعار استرشادية', W / 2, y + 28, '#6f6a5f', 14, 400, 'center');
+  y += 44;
+  text(s.foot, W - PAD, y, '#8e8e93', 18);
+  text('الأسعار استرشادية', W - PAD, y + 30, '#aeaeb2', 16);
 
   const blob = await new Promise((res, rej) => c.toBlob((b) => (b ? res(b) : rej(new Error('blob'))), 'image/png'));
   const file = new File([blob], 'iyar-gold.png', { type: 'image/png' });
@@ -1073,15 +1023,17 @@ function openSaveSheet(existing) {
   if (!r) return toast('أكمل البيانات أولًا');
   const mode = existing ? existing.mode : C.mode;
   const ownedDefault = existing ? existing.owned : mode !== 'sell';
-  openSheet(`
-    <h2 class="sheet-title">${existing ? 'تعديل' : 'حفظ في السجل'}</h2>
-    <label class="field"><span class="label">اسم المحل</span><span class="input"><input data-s="shop" maxlength="60" placeholder="مثال: مجوهرات دلمون" value="${esc(existing?.shop || '')}"></span></label>
-    <label class="field"><span class="label">ملاحظة</span><span class="input"><input data-s="note" maxlength="120" placeholder="خاتم، سلسلة، طقم…" value="${esc(existing?.note || '')}"></span></label>
-    ${mode !== 'sell' ? `<label class="switch"><input type="checkbox" data-s="owned" ${ownedDefault ? 'checked' : ''}><span class="track"></span><span>اشتريتها — أضفها إلى مجوهراتي</span></label>` : ''}
-    <button class="btn primary block" data-action="confirm-save">${icon('check', 18)} ${existing ? 'حفظ التعديل' : 'حفظ'}</button>`,
-  (sheet) => {
+  openSheet({
+    title: existing ? 'تعديل' : 'حفظ',
+    done: 'حفظ',
+    body: `${group(`
+      <label class="row field text"><span class="row-label"><span>المحل</span></span><span class="row-input"><input data-s="shop" maxlength="60" placeholder="مثال: مجوهرات دلمون" value="${esc(existing?.shop || '')}"></span></label>
+      <label class="row field text"><span class="row-label"><span>ملاحظة</span></span><span class="row-input"><input data-s="note" maxlength="120" placeholder="خاتم، سلسلة، طقم" value="${esc(existing?.note || '')}"></span></label>
+    `)}
+    ${mode !== 'sell' ? group(switchRow('أضفها إلى مجوهراتي', 'data-s="owned"', ownedDefault), { foot: 'القطع اللي تملكها تنحسب في قيمة ذهبك وفي الزكاة.' }) : ''}`,
+  }, (sheet) => {
     sheet.querySelector('[data-s="shop"]').focus({ preventScroll: true });
-    sheet.querySelector('[data-action="confirm-save"]').onclick = () => {
+    sheet.querySelector('[data-done]').onclick = () => {
       const shop = sheet.querySelector('[data-s="shop"]').value.trim();
       const note = sheet.querySelector('[data-s="note"]').value.trim();
       const owned = !!sheet.querySelector('[data-s="owned"]')?.checked;
@@ -1098,14 +1050,14 @@ function openSaveSheet(existing) {
       }
       save('entries', S.entries);
       closeSheet();
-      toast(existing ? 'تم التعديل' : 'تم الحفظ في السجل');
+      toast(existing ? 'تم التعديل' : 'تم الحفظ');
       if (S.tab === 'vault') renderVault();
     };
   });
 }
 
 /* ======================================================================
-   Vault tab — saved entries + "my jewellery"
+   Vault tab: saved entries + "my jewellery"
    ====================================================================== */
 
 const MODE_NAME = { analyze: 'فاتورة', price: 'تسعير', sell: 'بيع' };
@@ -1140,15 +1092,15 @@ function holdings() {
 
 function renderVault() {
   view.innerHTML = `
-    ${header('مجوهراتي')}
+    ${navBar('مجوهراتي')}
     <section id="vault-sum"></section>
-    ${seg('vf', [['all', 'الكل'], ['owned', 'أملكها'], ['analyze', 'فواتير'], ['price', 'تسعير'], ['sell', 'بيع']], S.vaultFilter)}
-    <section id="vault-list" class="list"></section>`;
+    ${S.entries.length ? seg('vf', [['all', 'الكل'], ['owned', 'أملكها'], ['sell', 'بيع']], S.vaultFilter) : ''}
+    <section id="vault-list"></section>`;
   paintVault();
   view.onclick = (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.vf) { S.vaultFilter = b.dataset.vf; renderVault(); }
+    if (b.dataset.vf) { S.vaultFilter = b.dataset.vf; selectSeg(b); paintVault(); }
     else if (b.dataset.entry) openEntry(b.dataset.entry);
     else if (b.dataset.action === 'to-calc') location.hash = '#calc';
   };
@@ -1163,19 +1115,20 @@ function paintVault() {
     const value = P ? h.valueOf(P) : null;
     const paidNowValue = P ? h.valueOf(P, (e) => e.currency === S.settings.currency && entryPaid(e) > 0) : null;
     const diff = paidNowValue != null && h.paid ? paidNowValue - h.paid : null;
+    const count = h.owned.length;
     sum.innerHTML = `
-      <div class="hero vault-hero">
-        <div class="hero-eyebrow">قيمة ذهبك الآن (سعر الذهب فقط)</div>
-        <div class="hero-price">${value != null ? `${num(fmt(value, cur().dec))}<span class="cur">${cur().sym}</span>` : '—'}</div>
-        <div class="hero-sub">${num(fmtW(h.weight))} غ · ${num(fmt(h.owned.length, 0))} ${h.owned.length > 2 && h.owned.length < 11 ? 'قطع' : 'قطعة'} · صافي ${num(fmtW(h.pure))} غ عيار 24</div>
-        <div class="karat-tags">${Object.entries(h.byK).sort((a, b) => b[0] - a[0]).map(([k, w]) => `<span>عيار ${num(k)}: ${num(fmtW(w))} غ</span>`).join('')}</div>
-        ${diff != null ? `
-        <div class="vault-cmp">
-          <div><span>دفعت</span><b>${money(h.paid)}</b></div>
-          <div><span>${diff >= 0 ? 'ربح الذهب' : 'الفرق'}</span><b class="${diff >= 0 ? 'up' : 'down'}"><span class="money">${num(`${diff >= 0 ? '+' : '−'}${fmt(Math.abs(diff), cur().dec)}`)}<span class="cur">${cur().sym}</span></span></b></div>
-        </div>
-        <p class="hero-foot">ما دفعته يشمل المصنعية والضريبة، أما القيمة الحالية فهي للذهب فقط — أي ما قد تحصل عليه تقريبًا عند البيع.</p>` : ''}
-      </div>`;
+      <div class="quote">
+        <p class="quote-label">قيمة ذهبك الآن</p>
+        <p class="quote-price">${value != null ? `${num(fmt(value, cur().dec))}<span class="cur">${cur().sym}</span>` : '-'}</p>
+        <p class="quote-change muted">${num(fmtW(h.weight))} غ في ${count === 1 ? 'قطعة واحدة' : count === 2 ? 'قطعتين' : `${num(fmt(count, 0))} ${count < 11 ? 'قطع' : 'قطعة'}`}</p>
+      </div>
+      ${group(Object.entries(h.byK).sort((a, b) => b[0] - a[0]).map(([k, w]) => row(`عيار ${num(k)}`, grams(w))).join(''), { head: 'حسب العيار' })}
+      ${diff != null ? group(
+        row('دفعت', money(h.paid))
+        + row('قيمتها كذهب اليوم', money(paidNowValue))
+        + row('الفرق', `<span class="${diff >= 0 ? 'up' : 'down'}">${num(signed(diff, cur().dec))} <span class="cur">${cur().sym}</span></span>`, { cls: 'total' }),
+        { foot: 'المبلغ المدفوع يشمل المصنعية والضريبة، والقيمة اليوم للذهب فقط، يعني تقريبًا اللي تحصله لو بعت.' },
+      ) : ''}`;
   } else {
     sum.innerHTML = '';
   }
@@ -1185,35 +1138,30 @@ function paintVault() {
   const box = document.getElementById('vault-list');
   if (!list.length) {
     box.innerHTML = `
-      <div class="empty big">
-        ${icon('gem', 36)}
-        <p>${S.entries.length ? 'لا توجد عناصر في هذا التصنيف' : 'لم تحفظ أي حساب بعد. احسب مصنعية قطعة ثم اضغط «حفظ» لتظهر هنا، وتتابع قيمة ذهبك مع تغيّر السعر.'}</p>
-        ${S.entries.length ? '' : '<button class="btn primary" data-action="to-calc">افتح الحاسبة</button>'}
+      <div class="empty">
+        ${icon('vault', 44)}
+        <h2>${S.entries.length ? 'لا يوجد شيء هنا' : 'لا توجد حسابات محفوظة'}</h2>
+        <p>${S.entries.length ? 'جرّب تصنيف ثاني.' : 'احسب قطعة في الحاسبة واضغط «حفظ»، وتظهر هنا مع قيمتها اليوم.'}</p>
+        ${S.entries.length ? '' : '<button type="button" class="btn filled" data-action="to-calc">افتح الحاسبة</button>'}
       </div>`;
     return;
   }
-  box.innerHTML = list.map((e) => {
+  box.innerHTML = group(list.map((e) => {
     const c = CURRENCIES[e.currency] || cur();
     const r = e.result || {};
     const w = e.items.reduce((s, it) => s + it.w, 0);
-    const ks = [...new Set(e.items.map((it) => it.k))].join('/');
-    let key = '', keyLabel = '';
-    if (e.mode === 'analyze' && !r.belowGold) { key = r.makingPerGram; keyLabel = 'مصنعية/غ'; }
+    const ks = [...new Set(e.items.map((it) => it.k))].join(' و ');
+    let key = NaN, keyLabel = '';
+    if (e.mode === 'analyze' && !r.belowGold) { key = r.makingPerGram; keyLabel = 'مصنعية للغرام'; }
     else if (e.mode === 'price') { key = r.total; keyLabel = 'الإجمالي'; }
     else if (e.mode === 'sell') { key = r.offer ?? r.gold; keyLabel = r.offer != null ? 'العرض' : 'القيمة'; }
     return `
-      <button class="entry" data-entry="${e.id}">
-        <span class="entry-icon m-${e.mode}">${MODE_NAME[e.mode]}</span>
-        <span class="entry-main">
-          <b>${esc(e.shop || e.note || MODE_NAME[e.mode])}${e.owned ? ' <span class="own">أملكها</span>' : ''}</b>
-          <span class="muted small">${num(fmtW(w))} غ · عيار ${num(ks)} · ${dateFmt(e.ts, { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-        </span>
-        <span class="entry-val">
-          <b>${Number.isFinite(key) ? `${num(fmt(key, c.dec))} <span class="cur">${c.sym}</span>` : '—'}</b>
-          <span class="muted small">${keyLabel}</span>
-        </span>
+      <button type="button" class="row entry" data-entry="${e.id}">
+        <span class="row-label"><span>${esc(e.shop || e.note || MODE_NAME[e.mode])}</span><small>${MODE_NAME[e.mode]}، ${num(fmtW(w))} غ عيار ${num(ks)}، ${dateFmt(e.ts, { day: 'numeric', month: 'short' })}</small></span>
+        <span class="row-value"><span>${Number.isFinite(key) ? `${num(fmt(key, c.dec))} <span class="cur">${c.sym}</span>` : '-'}</span><small>${keyLabel}</small></span>
+        ${icon('chevron', 16)}
       </button>`;
-  }).join('');
+  }).join(''), { head: f === 'owned' ? 'القطع اللي أملكها' : 'المحفوظات' });
 }
 
 function openEntry(id) {
@@ -1225,24 +1173,26 @@ function openEntry(id) {
   const prevCur = S.settings.currency;
   // Render the stored result in the currency it was saved in.
   S.settings.currency = e.currency;
-  const body = resultHTML(e.mode, e.result, e.p24, false);
+  const body = resultHTML(e.mode, e.result, false);
+  const then24 = money(e.p24);
   S.settings.currency = prevCur;
-  openSheet(`
-    <h2 class="sheet-title">${esc(e.shop || MODE_NAME[e.mode])}</h2>
-    <p class="muted small">${MODE_NAME[e.mode]} · ${dateFmt(e.ts, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}${e.note ? ` · ${esc(e.note)}` : ''}</p>
-    <div class="result in-sheet">${body}</div>
-    <div class="meta-row"><span>سعر عيار 24 وقتها</span><b>${num(fmt(e.p24, (CURRENCIES[e.currency] || cur()).dec))} ${(CURRENCIES[e.currency] || cur()).sym}</b></div>
-    ${nowVal != null && sameCur ? `<div class="meta-row"><span>قيمة الذهب اليوم</span><b>${money(nowVal)}</b></div>` : ''}
-    <div class="sheet-actions">
-      <button class="btn" data-a="load">${icon('calc', 18)} افتح في الحاسبة</button>
-      <button class="btn" data-a="share">${icon('share', 18)} صورة</button>
-      <button class="btn" data-a="copy">${icon('copy', 18)} نسخ</button>
-      <button class="btn" data-a="edit">${icon('edit', 18)} تعديل</button>
-      <button class="btn danger" data-a="del">${icon('trash', 18)} حذف</button>
-    </div>`,
-  (sheet) => {
+  openSheet({
+    title: esc(e.shop || MODE_NAME[e.mode]),
+    body: `
+      <p class="sheet-intro">${MODE_NAME[e.mode]}، ${dateFmt(e.ts, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}${e.note ? `<br>${esc(e.note)}` : ''}</p>
+      <div class="result in-sheet">${body}</div>
+      ${group(row('سعر عيار 24 وقتها', then24) + (nowVal != null && sameCur ? row('قيمة الذهب اليوم', money(nowVal)) : ''))}
+      ${group([
+        actionRow('افتح في الحاسبة', 'data-a="load"', { ic: 'calc' }),
+        actionRow('مشاركة كصورة', 'data-a="share"', { ic: 'image' }),
+        actionRow('نسخ كنص', 'data-a="copy"', { ic: 'copy' }),
+        actionRow('تعديل الاسم والملاحظة', 'data-a="edit"', { ic: 'edit' }),
+      ].join(''))}
+      ${group(actionRow('حذف', 'data-a="del"', { ic: 'trash', cls: 'destructive' }))}`,
+  }, (sheet) => {
     sheet.onclick = (ev) => {
-      const a = ev.target.closest('[data-a]')?.dataset.a;
+      const btn = ev.target.closest('[data-a]');
+      const a = btn?.dataset.a;
       if (!a) return;
       if (a === 'share') shareImage(e).catch(() => toast('تعذّر إنشاء الصورة'));
       else if (a === 'copy') copyText(describe(e));
@@ -1259,122 +1209,82 @@ function openEntry(id) {
         location.hash = '#calc';
         if (S.tab === 'calc') renderCalc();
       } else if (a === 'del') {
-        const btn = ev.target.closest('[data-a]');
         if (!btn.dataset.armed) {
           btn.dataset.armed = '1';
-          btn.innerHTML = `${icon('trash', 18)} تأكيد الحذف`;
+          btn.querySelector('span').textContent = 'اضغط مرة ثانية للتأكيد';
           return;
         }
         S.entries = S.entries.filter((x) => x.id !== e.id);
         save('entries', S.entries);
         closeSheet();
         toast('تم الحذف');
-        paintVault();
+        renderVault();
       }
     };
   });
 }
 
 /* ======================================================================
-   Tools tab — zakat, karat converter, settings, backup
+   Tools tab: zakat, karat converter, settings, backup
    ====================================================================== */
 
 function renderTools() {
   const st = S.settings;
   S.zakatItems.forEach((it) => { if (!it.k) it.k = defK(); });
-  const currencyOpts = Object.entries(CURRENCIES).map(([code, c]) => `<option value="${code}" ${code === st.currency ? 'selected' : ''}>${c.country} — ${c.name} (${c.sym})</option>`).join('');
+  const currencyOpts = Object.entries(CURRENCIES).map(([code, c]) => `<option value="${code}" ${code === st.currency ? 'selected' : ''}>${c.country}، ${c.name}</option>`).join('');
+  const select = (attrs, opts) => `<span class="row-input select"><select ${attrs}>${opts}</select></span>`;
+  const auto = st.priceMode !== 'manual';
   view.innerHTML = `
-    ${header('أدوات')}
+    ${navBar('أدوات')}
 
-    <section class="card">
-      <div class="card-head"><h2>زكاة الذهب</h2><span class="muted small">النصاب ${num(NISAB_GRAMS)} غ عيار 24</span></div>
-      <div id="zk-items">
-        ${S.zakatItems.map((it, i) => `
-          <div class="item compact" data-zi="${i}">
-            <label class="field">
-              <span class="input"><input inputmode="decimal" autocomplete="off" placeholder="الوزن" aria-label="الوزن" data-zf="w" value="${esc(it.w)}"><span class="unit">غ</span></span>
-            </label>
-            ${karatSeg('zk', it.k)}
-            ${S.zakatItems.length > 1 ? `<button class="icon-btn sm" data-zrm="${i}" aria-label="حذف">${icon('x', 16)}</button>` : ''}
-          </div>`).join('')}
-      </div>
-      <div class="btn-row">
-        <button class="add" data-action="zadd">${icon('plus', 18)} عيار آخر</button>
-        ${holdings().owned.length ? `<button class="add" data-action="zfill">${icon('vault', 18)} من مجوهراتي</button>` : ''}
-      </div>
-      <div id="zk-res"></div>
-      <p class="note">إذا بلغ ذهبك النصاب وحال عليه الحول، فالزكاة ربع العشر (2.5٪). في حُلي الاستعمال خلاف بين العلماء، فاستشر من تثق بعلمه.</p>
-    </section>
+    ${group(`
+      ${S.zakatItems.map((it, i) => `
+        <div class="zk-item" data-zi="${i}">
+          ${inputRow(S.zakatItems.length > 1 ? `الوزن ${num(i + 1)}` : 'الوزن', `data-zf="w" value="${esc(it.w)}"`, 'غ', { placeholder: '0.00' })}
+          ${stackRow('', `<div class="seg-line">${karatSeg('zk', it.k)}${S.zakatItems.length > 1 ? `<button type="button" class="head-btn" data-zrm="${i}">حذف</button>` : ''}</div>`)}
+        </div>`).join('')}
+      ${actionRow('إضافة عيار آخر', 'data-action="zadd"', { ic: 'plus' })}
+      ${holdings().owned.length ? actionRow('استخدم أوزان مجوهراتي', 'data-action="zfill"', { ic: 'vault' }) : ''}
+    `, { head: 'زكاة الذهب' })}
+    <div id="zk-res"></div>
 
-    <section class="card">
-      <div class="card-head"><h2>محوّل العيارات</h2></div>
-      <label class="field"><span class="label">الوزن</span><span class="input"><input inputmode="decimal" autocomplete="off" placeholder="0.00" data-cv="w" value="${esc(S.conv.w)}"><span class="unit">غ</span></span></label>
-      <div class="conv-grid">
-        <div><span class="label">من عيار</span>${karatSeg('cf', S.conv.from)}</div>
-        <div><span class="label">إلى عيار</span>${karatSeg('ct', S.conv.to)}</div>
-      </div>
+    ${group(`
+      ${inputRow('الوزن', `data-cv="w" value="${esc(S.conv.w)}"`, 'غ', { placeholder: '0.00' })}
+      ${stackRow('من عيار', karatSeg('cf', S.conv.from))}
+      ${stackRow('إلى عيار', karatSeg('ct', S.conv.to))}
       <div id="cv-res"></div>
-    </section>
+    `, { head: 'تحويل بين العيارات', id: 'conv' })}
 
-    <section class="card" id="settings">
-      <div class="card-head"><h2>الإعدادات</h2></div>
+    ${group(`
+      <label class="row field"><span class="row-label">الدولة</span>${select('data-set="currency"', currencyOpts)}</label>
+      ${stackRow('مصدر السعر', seg('pm', [['auto', 'مباشر'], ['manual', 'يدوي']], st.priceMode))}
+      ${auto && st.currency === 'BHD' ? stackRow('التسعيرة', seg('pf', ['delmon', 'standard'].map((id) => [id, PROFILES[id].name]), profile() === PROFILES.standard ? 'standard' : st.profile)) : ''}
+      ${auto ? inputRow('تعديل إضافي', `data-set="adjustPct" value="${st.adjustPct || ''}"`, pctSign(), { sub: 'اختياري' }) : ''}
+      ${auto ? actionRow('مطابقة السعر مع محل', 'data-action="calibrate"', { ic: 'edit' }) : ''}
+      ${!auto ? stackRow('السعر المعلن لغرام عيار', karatSeg('mk', st.manualKarat)) : ''}
+      ${!auto ? inputRow('السعر', `data-set="manualPrice" value="${esc(st.manualPrice)}"`, cur().sym, { placeholder: '0.00' }) : ''}
+    `, { head: 'السعر', id: 'settings', foot: auto ? (st.currency === 'BHD' ? profile().desc : 'السعر العالمي محوّل بسعر الصرف.') : 'بقية العيارات تنحسب تلقائيًا من هذا السعر.' })}
 
-      <label class="field"><span class="label">الدولة والعملة</span>
-        <span class="input select"><select data-set="currency">${currencyOpts}</select></span></label>
+    ${group(`
+      ${inputRow('نسبة الضريبة', `data-set="vatRate" value="${Math.round(st.vatRate * 1000) / 10}"`, pctSign())}
+      <label class="row field"><span class="row-label">تنطبق على</span>${select('data-set="vatBasis"', `
+        <option value="full" ${st.vatBasis === 'full' ? 'selected' : ''}>كامل السعر</option>
+        <option value="making" ${st.vatBasis === 'making' ? 'selected' : ''}>المصنعية فقط</option>
+        <option value="none" ${st.vatBasis === 'none' ? 'selected' : ''}>بدون ضريبة</option>`)}</label>
+    `, { head: 'الضريبة' })}
 
-      <div class="row2">
-        <label class="field"><span class="label">نسبة الضريبة</span>
-          <span class="input"><input inputmode="decimal" data-set="vatRate" value="${Math.round(st.vatRate * 1000) / 10}"><span class="unit">٪</span></span></label>
-        <label class="field"><span class="label">تُطبّق على</span>
-          <span class="input select"><select data-set="vatBasis">
-            <option value="full" ${st.vatBasis === 'full' ? 'selected' : ''}>كامل السعر</option>
-            <option value="making" ${st.vatBasis === 'making' ? 'selected' : ''}>المصنعية فقط</option>
-            <option value="none" ${st.vatBasis === 'none' ? 'selected' : ''}>لا توجد ضريبة</option>
-          </select></span></label>
-      </div>
+    ${group(`
+      ${stackRow('العيار الافتراضي', karatSeg('dk', st.defaultKarat))}
+      ${stackRow('الأرقام', seg('dg', [['latn', '123'], ['arab', '١٢٣']], st.digits))}
+      ${stackRow('المظهر', seg('th', [['system', 'تلقائي'], ['light', 'فاتح'], ['dark', 'داكن']], st.theme))}
+    `, { head: 'العرض' })}
 
-      <span class="label">العيار الافتراضي</span>
-      ${karatSeg('dk', st.defaultKarat)}
+    ${group(`
+      ${actionRow('تصدير نسخة احتياطية', 'data-action="export"', { ic: 'share' })}
+      <label class="row action">${icon('save', 20)}<span>استيراد نسخة احتياطية</span><input type="file" accept="application/json,.json" data-action="import" hidden></label>
+    `, { head: 'البيانات', foot: 'بياناتك محفوظة على هذا الجهاز فقط.' })}
 
-      <span class="label">مصدر السعر</span>
-      ${seg('pm', [['auto', 'تلقائي مباشر'], ['manual', 'يدوي']], st.priceMode)}
-      ${st.priceMode === 'manual' ? `
-        <div class="manual-box">
-          <span class="label">السعر المعلن عند المحل لغرام عيار</span>
-          ${karatSeg('mk', st.manualKarat)}
-          <span class="input"><input inputmode="decimal" data-set="manualPrice" placeholder="0.00" value="${esc(st.manualPrice)}"><span class="unit">${cur().sym}</span></span>
-          <p class="note">بقية العيارات تُحسب تلقائيًا من هذا السعر.</p>
-        </div>` : `
-        ${st.currency === 'BHD' ? `
-        <span class="label">طريقة التسعير</span>
-        ${seg('pf', ['delmon', 'standard'].map((id) => [id, PROFILES[id].name]), profile() === PROFILES.standard ? 'standard' : st.profile)}
-        <p class="note">${profile().desc}</p>` : ''}
-        <label class="field"><span class="label">تعديل إضافي على السعر <span class="muted">(اختياري)</span></span>
-          <span class="input"><input inputmode="decimal" data-set="adjustPct" placeholder="0" value="${st.adjustPct || ''}"><span class="unit">٪</span></span></label>
-        <p class="note">لو كانت أسعار المحل اللي تتعامل معه أعلى أو أقل قليلًا من هذي التسعيرة، اكتب الفرق كنسبة (مثل 0.5 أو ‎-0.3)، أو خلّ التطبيق يحسبها لك:</p>
-        <button class="btn block" data-action="calibrate">${icon('edit', 18)} طابق مع سعر محل أو حساب</button>`}
-
-      <span class="label">الأرقام</span>
-      ${seg('dg', [['latn', '123'], ['arab', '١٢٣']], st.digits)}
-
-      <span class="label">المظهر</span>
-      ${seg('th', [['system', 'تلقائي'], ['light', 'فاتح'], ['dark', 'داكن']], st.theme)}
-    </section>
-
-    <section class="card">
-      <div class="card-head"><h2>النسخ الاحتياطي</h2></div>
-      <p class="note">بياناتك محفوظة على هذا الجهاز فقط. صدّر نسخة واحفظها في الملفات لتنقلها لجهاز آخر.</p>
-      <div class="btn-row">
-        <button class="btn" data-action="export">تصدير</button>
-        <label class="btn">استيراد<input type="file" accept="application/json,.json" data-action="import" hidden></label>
-      </div>
-    </section>
-
-    <section class="card subtle about">
-      <p><b>عيار</b> · حاسبة الذهب والمصنعية</p>
-      <p class="muted small">الأسعار من عدة مصادر عالمية (Gold API وAwesomeAPI ومرجع يومي) ويؤخذ الوسيط بينها لاستبعاد أي سعر شاذ. الأسعار استرشادية وقد تختلف قليلًا عن أسعار المحلات.</p>
-      <p class="muted small">الإصدار ${num(BUILD)}</p>
-    </section>`;
+    <p class="about">عيار، الإصدار ${num(BUILD.replace('-', '.'))}<br>الأسعار استرشادية وقد تختلف قليلًا عن المحلات.</p>`;
   paintZakat();
   paintConv();
 
@@ -1394,9 +1304,9 @@ function renderTools() {
     if (!b) return;
     const d = b.dataset;
     if (d.zk) {
-      const row = b.closest('[data-zi]');
-      S.zakatItems[row.dataset.zi].k = Number(d.zk);
-      row.querySelectorAll('[data-zk]').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+      const it = b.closest('[data-zi]');
+      S.zakatItems[it.dataset.zi].k = Number(d.zk);
+      selectSeg(b);
       save('zakat', S.zakatItems); paintZakat();
     } else if (d.zrm) { S.zakatItems.splice(Number(d.zrm), 1); save('zakat', S.zakatItems); renderTools(); }
     else if (d.action === 'zadd') { S.zakatItems.push({ w: '', k: defK() }); save('zakat', S.zakatItems); renderTools(); }
@@ -1406,7 +1316,7 @@ function renderTools() {
     }
     else if (d.cf || d.ct) {
       if (d.cf) S.conv.from = Number(d.cf); else S.conv.to = Number(d.ct);
-      b.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+      selectSeg(b);
       paintConv();
     }
     else if (d.pf) {
@@ -1415,7 +1325,7 @@ function renderTools() {
         setSetting('profile', d.pf, true);
         refresh();
         startPolling();
-        toast(`التسعير الآن: ${PROFILES[d.pf].name}`);
+        toast(`التسعيرة الآن: ${PROFILES[d.pf].name}`);
       }
     }
     else if (d.dk) setSetting('defaultKarat', Number(d.dk), true);
@@ -1461,19 +1371,14 @@ function paintZakat() {
   const P = p24();
   const z = zakat({ items: S.zakatItems, p24: P, ratios: ratios() });
   if (!(z.weight > 0)) { box.innerHTML = ''; return; }
-  const prog = Math.min(z.pure / z.nisab, 1) * 100;
-  box.innerHTML = `
-    <div class="zk">
-      <div class="zk-bar"><i style="width:${prog}%"></i></div>
-      <div class="zk-meta"><span>صافي ذهبك ${num(fmtW(z.pure))} غ</span><span>النصاب ${num(z.nisab)} غ${z.nisabValue ? ` ≈ ${money(z.nisabValue)}` : ''}</span></div>
-      ${z.due ? `
-        <div class="res-hero compact">
-          <div class="res-label">الزكاة الواجبة</div>
-          <div class="res-big">${P ? money(z.zakatValue) : '—'}</div>
-          <div class="muted small">أو ${num(fmtW(z.zakatPure))} غ ذهب صافٍ (عيار 24)</div>
-        </div>` : `
-        <div class="pill lv1">لم يبلغ النصاب · باقي ${num(fmtW(z.remaining))} غ صافٍ</div>`}
-    </div>`;
+  box.innerHTML = z.due
+    ? `<div class="result-head compact">
+        <p class="result-label">الزكاة الواجبة</p>
+        <p class="result-value">${P ? money(z.zakatValue) : '-'}</p>
+        <p class="verdict neutral">أو ${num(fmtW(z.zakatPure))} غ ذهب صافي</p>
+      </div>
+      ${group(row('الذهب الصافي عندك', grams(z.pure)) + row('النصاب', grams(z.nisab), { sub: z.nisabValue ? `قيمته ${money(z.nisabValue)}` : '' }), { foot: 'إذا بلغ ذهبك النصاب وحال عليه الحول فالزكاة ربع العشر. في حُلي الاستعمال خلاف بين العلماء، فاسأل من تثق بعلمه.' })}`
+    : group(row('الذهب الصافي عندك', grams(z.pure)) + row('النصاب', grams(z.nisab)) + row('الحالة', `<span class="muted">باقي ${num(fmtW(z.remaining))} غ</span>`), { foot: 'لم يبلغ ذهبك النصاب، فلا زكاة عليه.' });
 }
 
 function paintConv() {
@@ -1483,13 +1388,7 @@ function paintConv() {
   if (!(w > 0)) { box.innerHTML = ''; return; }
   const out = convertKarat(w, S.conv.from, S.conv.to);
   const P = p24();
-  box.innerHTML = `
-    <div class="conv-out">
-      <div>${grams(w)} <span class="muted">عيار ${num(S.conv.from)}</span></div>
-      <span class="eq">=</span>
-      <div><b>${grams(out)}</b> <span class="muted">عيار ${num(S.conv.to)}</span></div>
-    </div>
-    <p class="note">تحتوي على ${num(fmtW((w * S.conv.from) / 24))} غ ذهب صافٍ${P ? ` · قيمتها ${money(kp(P, S.conv.from) * w)}` : ''}.</p>`;
+  box.innerHTML = row(`يساوي بعيار ${num(S.conv.to)}`, grams(out), { cls: 'total', sub: `فيه ${num(fmtW((w * S.conv.from) / 24))} غ ذهب صافي${P ? `، قيمته ${money(kp(P, S.conv.from) * w)}` : ''}` });
 }
 
 function exportBackup() {
@@ -1533,7 +1432,7 @@ function applyTheme() {
   if (t === 'light' || t === 'dark') root.setAttribute('data-theme', t);
   else root.removeAttribute('data-theme');
   const dark = t === 'dark' || (t === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
-  document.querySelector('meta[name="theme-color"]:not([media])')?.setAttribute('content', dark ? '#12110e' : '#f6f3ec');
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', dark ? '#000000' : '#f2f2f7');
 }
 
 let resizeT;

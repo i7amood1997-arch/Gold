@@ -2,26 +2,20 @@
 // the next launch; the cache only answers when there is no network. Price
 // APIs are cross-origin and never touched here — the app caches the last
 // good price itself.
-const CACHE = 'iyar-v5';
+const CACHE = 'iyar-v6';
 
 const SHELL = [
   './',
   './index.html',
   './app.css',
-  './fonts.css',
   './manifest.json',
   './js/app.js',
   './js/calc.js',
   './js/prices.js',
   './js/store.js',
+  './js/icons.js',
   './icons/favicon.svg',
   './icons/icon-192.png',
-  './fonts/plex-arabic-arabic-400.woff2',
-  './fonts/plex-arabic-arabic-500.woff2',
-  './fonts/plex-arabic-arabic-600.woff2',
-  './fonts/plex-arabic-latin-400.woff2',
-  './fonts/plex-arabic-latin-500.woff2',
-  './fonts/plex-arabic-latin-600.woff2',
 ];
 
 async function recache() {
