@@ -55,7 +55,10 @@ const time = (ts) => { const f = new DateFormatter(); f.dateFormat = 'HH:mm'; re
 function build(data) {
   const w = new ListWidget();
   w.url = APP_URL;
-  w.refreshAfterDate = new Date(Date.now() + 15 * 60 * 1000);
+  // A request, not a schedule: iOS decides when widgets actually refresh
+  // (budget, how often the screen is viewed, Low Power Mode). 5 min is the
+  // shortest interval iOS will consider.
+  w.refreshAfterDate = new Date(Date.now() + 5 * 60 * 1000);
   const family = config.widgetFamily || 'accessoryRectangular';
 
   if (!data) {
