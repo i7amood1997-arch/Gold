@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#f2f2f7" />
+<title>ودجت عيار</title>
+<link rel="icon" type="image/svg+xml" href="../icons/favicon.svg" />
+<link rel="stylesheet" href="../app.css" />
+<style>
+  .steps { counter-reset: s; }
+  .steps .row { align-items: flex-start; }
+  .steps .row::after { content: none; }
+  .steps .row-label span::before { counter-increment: s; content: counter(s) '. '; font-weight: 600; }
+  .btn.block { width: 100%; margin-top: 24px; }
+  code { font-family: ui-monospace, Menlo, monospace; font-size: 15px; background: var(--fill); padding: 1px 6px; border-radius: 6px; }
+</style>
+</head>
+<body>
+<main class="view" style="padding-bottom: 48px">
+  <header class="nav"><h1>ودجت شاشة القفل</h1><div class="nav-trailing"><a class="bar-btn" href="../">التطبيق</a></div></header>
+  <p class="lead">يعرض سعر غرام الذهب بتسعيرة دلمون على شاشة القفل أو الشاشة الرئيسية، عن طريق تطبيق Scriptable المجاني.</p>
+
+  <button type="button" class="btn filled block" id="copy">نسخ السكربت</button>
+
+  <section class="group steps">
+    <h2 class="group-head">طريقة التركيب</h2>
+    <div class="list">
+      <div class="row"><span class="row-label"><span>نزّل تطبيق <a href="https://apps.apple.com/app/scriptable/id1405459188" style="text-decoration:underline">Scriptable</a> من App Store.</span></span></div>
+      <div class="row"><span class="row-label"><span>اضغط «نسخ السكربت» فوق.</span></span></div>
+      <div class="row"><span class="row-label"><span>افتح Scriptable، اضغط + فوق، والصق، وسمّه «عيار».</span></span></div>
+      <div class="row"><span class="row-label"><span>اضغط مطولًا على شاشة القفل، ثم «تخصيص»، ثم المربع تحت الساعة، واختر Scriptable.</span></span></div>
+      <div class="row"><span class="row-label"><span>اضغط على الودجت اللي أضفته واختر السكربت «عيار».</span></span></div>
+    </div>
+    <p class="group-foot">لعيار غير 21، اكتب الرقم (24 أو 22 أو 18) في خانة Parameter بنفس المكان.</p>
+  </section>
+
+  <section class="group">
+    <h2 class="group-head">ملاحظات</h2>
+    <div class="list">
+      <div class="row"><span class="row-label"><span>يتحدث السعر كل 15 إلى 30 دقيقة تقريبًا، والآيفون هو اللي يحدد التوقيت.</span></span></div>
+      <div class="row"><span class="row-label"><span>لو انقطع النت يعرض آخر سعر ويكتب جنبه «قديم».</span></span></div>
+      <div class="row"><span class="row-label"><span>الضغط على الودجت يفتح تطبيق عيار.</span></span></div>
+    </div>
+  </section>
+</main>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script>
+  const toast = (m) => { const t = document.getElementById('toast'); t.textContent = m; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 2000); };
+  // Fetch first, then copy: iOS only allows clipboard writes inside the tap,
+  // so we keep the text ready before the button is pressed.
+  let code = '';
+  fetch('iyar-widget.js', { cache: 'no-cache' }).then((r) => r.text()).then((t) => { code = t; });
+  document.getElementById('copy').onclick = async () => {
+    if (!code) return toast('لحظة، جارٍ التحميل');
+    try { await navigator.clipboard.writeText(code); toast('تم النسخ، الصقه في Scriptable'); }
+    catch { location.href = 'iyar-widget.js'; }
+  };
+</script>
+</body>
+</html>

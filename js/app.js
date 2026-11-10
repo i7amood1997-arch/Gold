@@ -6,7 +6,7 @@ import { CURRENCIES, PROFILES, fetchSpot, fetchFx, fetchDay } from './prices.js'
 import { load, save, DEFAULT_SETTINGS, uid } from './store.js';
 import { ICONS } from './icons.js';
 
-export const BUILD = '2026.11.10-5';
+export const BUILD = '2026.11.10-6';
 
 /* ======================================================================
    State
@@ -1278,6 +1278,8 @@ function renderTools() {
       ${stackRow('الأرقام', seg('dg', [['latn', '123'], ['arab', '١٢٣']], st.digits))}
       ${stackRow('المظهر', seg('th', [['system', 'تلقائي'], ['light', 'فاتح'], ['dark', 'داكن']], st.theme))}
     `, { head: 'العرض' })}
+
+    ${group(`<a class="row action" href="widget/">${icon('prices', 20)}<span>ودجت شاشة القفل</span></a>`, { head: 'الودجت', foot: 'سعر الذهب على شاشة القفل عن طريق تطبيق Scriptable.' })}
 
     ${group(`
       ${actionRow('تصدير نسخة احتياطية', 'data-action="export"', { ic: 'share' })}
