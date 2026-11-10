@@ -4,7 +4,7 @@ import {
   parseNum, gramPrice24, karatPrice, analyzeInvoice, pricePieces, sellGold, zakat,
   convertKarat, makingLevel, TROY_OUNCE_G,
 } from '../js/calc.js';
-import { aggregate, parseAwesome, parseGoldApi, parseCurrencyApiXau, PROFILES } from '../js/prices.js';
+import { aggregate, parseAwesome, parseGoldApi, parseCurrencyApiXau, PROFILES, parseDelmon, preferQuote } from '../js/prices.js';
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} ≈ ${b}`);
 
@@ -160,4 +160,25 @@ test('Delmon profile reproduces delmonbars.com prices', () => {
   near(r.pure, 8.75);
   // Standard profile matches the textbook formula.
   near(PROFILES.standard.p24(3110.34768, 0.376), 37.6, 1e-9);
+});
+
+test('dealer feed is preferred only when it agrees with independent feeds', () => {
+  const now = Date.parse('2026-11-10T07:00:00Z');
+  const d = parseDelmon({ gold: 4123.67, fetched_at: now / 1000 });
+  near(d.price, 4123.67);
+  const agg = aggregate([{ name: 'Gold API', kind: 'live', price: 4122, ts: now - 60e3 }], { now });
+  const r = preferQuote(agg, d, { now });
+  near(r.usd, 4123.67);
+  assert.equal(r.primary, 'delmon');
+  assert.equal(r.status, 'live');
+  assert.deepEqual(r.sources, ['دلمون (Swissquote)', 'Gold API']);
+  // A dealer price >1% away is ignored.
+  const bad = preferQuote(agg, { ...d, price: 4300 }, { now });
+  near(bad.usd, 4122);
+  // Weekend: independent feed is old, so the market reads closed even though the dealer stamps "now".
+  const old = aggregate([{ name: 'Gold API', kind: 'live', price: 4122, ts: now - 40 * 3600e3 }], { now });
+  assert.equal(preferQuote(old, d, { now }).status, 'closed');
+  // Dealer alone still works; garbage is ignored.
+  assert.equal(preferQuote(null, d, { now }).usd, 4123.67);
+  assert.equal(preferQuote(agg, parseDelmon({}), { now }), agg);
 });

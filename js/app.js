@@ -5,7 +5,7 @@ import {
 import { CURRENCIES, PROFILES, fetchSpot, fetchFx, fetchDay } from './prices.js';
 import { load, save, DEFAULT_SETTINGS, uid } from './store.js';
 
-export const BUILD = '2026.11.10-2';
+export const BUILD = '2026.11.10-3';
 
 /* ======================================================================
    State
@@ -161,7 +161,8 @@ const icon = (name, size = 22) => `<svg class="ic" width="${size}" height="${siz
    Prices: fetch, cache, poll
    ====================================================================== */
 
-const POLL_MS = 30000;
+// Delmon's own page refreshes every 10 s; follow it closely when matching it.
+const pollMs = () => (profile() === PROFILES.delmon ? 15000 : 30000);
 const FX_TTL = 6 * 3600e3;
 let pollTimer = null;
 let inflight = null;
@@ -172,7 +173,7 @@ async function refresh({ userAsked = false } = {}) {
   paintStatus();
   inflight = (async () => {
     try {
-      const r = await fetchSpot();
+      const r = await fetchSpot({ dealer: S.settings.priceMode === 'auto' && profile() === PROFILES.delmon ? 'delmon' : null });
       const prev = S.price?.usd;
       S.price = { ...r, fetchedAt: Date.now() };
       S.offline = false;
@@ -202,7 +203,7 @@ function startPolling() {
   stopPolling();
   pollTimer = setInterval(() => {
     if (document.visibilityState === 'visible') refresh();
-  }, POLL_MS);
+  }, pollMs());
 }
 function stopPolling() {
   if (pollTimer) clearInterval(pollTimer);
@@ -1412,6 +1413,8 @@ function renderTools() {
       if (d.pf !== S.settings.profile) {
         S.settings.adjustPct = 0; // a % matched under one formula is wrong under another
         setSetting('profile', d.pf, true);
+        refresh();
+        startPolling();
         toast(`التسعير الآن: ${PROFILES[d.pf].name}`);
       }
     }

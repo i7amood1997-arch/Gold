@@ -101,6 +101,12 @@ export function parseCurrencyApiXau(j) {
   return { id: 'daily', name: 'المرجع اليومي', kind: 'daily', price, ts, date: j?.date, rates };
 }
 
+// Delmon Bars' own price feed (Swissquote via their server; CORS open):
+// { gold: 4127.188, silver: 53.08, source: "Swissquote Public Feed", fetched_at: 1794293045 }
+export function parseDelmon(j) {
+  return { id: 'delmon', name: 'دلمون (Swissquote)', kind: 'live', price: Number(j?.gold), ts: Number(j?.fetched_at) * 1000 || Date.now() };
+}
+
 // ---- aggregation ---------------------------------------------------------
 
 const plausible = (q) => q && Number.isFinite(q.price) && q.price > 200 && q.price < 50000;
@@ -131,9 +137,31 @@ export function aggregate(quotes, { now = Date.now(), closedAfterMs = 30 * 60e3,
   };
 }
 
+// When the user prices with a dealer's formula, use the exact ounce price the
+// dealer uses — but only if it agrees with the independent feeds within
+// 1%, so a broken dealer feed can never push a wrong price. Market-open
+// status still comes from the independent feeds: the dealer's server stamps
+// every fetch with "now", even on weekends.
+export function preferQuote(agg, q, { now = Date.now() } = {}) {
+  if (!plausible(q)) return agg;
+  if (agg && Math.abs(q.price - agg.usd) / agg.usd > 0.01) return { ...agg, rejected: (agg.rejected || 0) + 1 };
+  return {
+    usd: q.price,
+    ts: agg ? agg.ts : q.ts,
+    status: agg ? agg.status : now - q.ts > 30 * 60e3 ? 'closed' : 'live',
+    sources: [q.name, ...(agg ? agg.sources : [])],
+    primary: q.id,
+    rejected: agg ? agg.rejected : 0,
+    spreadPct: agg ? Math.abs(q.price - agg.usd) / agg.usd : 0,
+  };
+}
+
 // ---- public API ----------------------------------------------------------
 
-export async function fetchSpot() {
+export async function fetchSpot({ dealer = null } = {}) {
+  const dealerJob = dealer === 'delmon'
+    ? getJSON(`https://delmonbars.com/prices-proxy.php?t=${Date.now()}`).then(parseDelmon).catch(() => null)
+    : Promise.resolve(null);
   const jobs = [
     getJSON('https://api.gold-api.com/price/XAU').then(parseGoldApi),
     getJSON('https://economia.awesomeapi.com.br/json/last/XAU-USD').then(parseAwesome),
@@ -142,7 +170,9 @@ export async function fetchSpot() {
   const settled = await Promise.allSettled(jobs);
   const quotes = settled.filter((s) => s.status === 'fulfilled').map((s) => s.value);
   const daily = quotes.find((q) => q.kind === 'daily' && plausible(q)) || null;
-  const agg = aggregate(quotes, { ref: daily?.price });
+  let agg = aggregate(quotes, { ref: daily?.price });
+  const dq = await dealerJob;
+  if (dq) agg = preferQuote(agg, dq);
   if (!agg) throw new Error('no source answered');
   return { ...agg, daily: daily ? { date: daily.date, usd: daily.price, rates: daily.rates } : null };
 }
