@@ -1,14 +1,14 @@
-// Renders icons/favicon.svg to the PNG sizes iOS and Android need.
+// Renders icons/favicon.svg to the PNG sizes iOS, Android and browsers need.
 // Usage: node tools/make-icons.mjs
 import { createRequire } from 'node:module';
-const { chromium } = createRequire(import.meta.url)('playwright');
 import { readFileSync, writeFileSync } from 'node:fs';
+const { chromium } = createRequire(import.meta.url)('playwright');
 
 const svg = readFileSync(new URL('../icons/favicon.svg', import.meta.url), 'utf8');
-// Full-bleed square (no rounded corners): the OS applies its own mask.
-const square = svg.replace(/<rect([^>]*)rx="112"/, '<rect$1');
-// Maskable: shrink the artwork into the 80% safe zone.
-const maskable = square.replace(/(<path[\s\S]*<\/svg>)/, '<g transform="translate(51.2 51.2) scale(.8)">$1').replace('</svg>', '</g></svg>');
+// Full-bleed square (no rounded corners): iOS and Android apply their own mask.
+const square = svg.replace(/(<rect[^>]*?) rx="\d+"/, '$1');
+// Maskable: keep the glyph inside Android's 80% safe circle.
+const maskable = square.replace(/<g id="glyph" transform="([^"]+)"/, '<g transform="translate(512 512) scale(.86) translate(-512 -512)"><g id="glyph" transform="$1"').replace('</svg>', '</g></svg>');
 
 const out = [
   ['icon-192.png', 192, square], ['icon-512.png', 512, square],

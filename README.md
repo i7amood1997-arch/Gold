@@ -29,7 +29,7 @@
 ```
 npm test                 # اختبارات الحسابات ومحرك الأسعار (Node 18+)
 python3 -m http.server   # تشغيل محلي على http://localhost:8000
-node tools/make-icons.mjs  # إعادة توليد الأيقونات من icons/favicon.svg (يحتاج Playwright)
+node tools/make-icons.mjs  # إعادة توليد الأيقونات من icons/favicon.svg (يحتاج Playwright). رمز السبائك من Hugeicons (رخصة MIT)
 ```
 
 - `js/calc.js` كل معادلات الذهب (بدون واجهة، ومغطاة بالاختبارات)

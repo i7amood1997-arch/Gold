@@ -6,7 +6,7 @@ import { CURRENCIES, PROFILES, fetchSpot, fetchFx, fetchDay } from './prices.js'
 import { load, save, DEFAULT_SETTINGS, uid } from './store.js';
 import { ICONS } from './icons.js';
 
-export const BUILD = '2026.11.10-4';
+export const BUILD = '2026.11.10-5';
 
 /* ======================================================================
    State
