@@ -7,7 +7,14 @@ export const KARATS = [24, 22, 21, 18];
 export const NISAB_GRAMS = 85; // pure (24K) gold
 export const ZAKAT_RATE = 0.025;
 
+// Fineness: how much pure gold a gram of karat k contains. Used for pure
+// weight (zakat, conversions) — never changes.
 export const purity = (k) => k / 24;
+
+// Price ratios: what a gram of karat k costs relative to a gram of 24K.
+// Normally equal to fineness, but some dealers price karats on their own
+// ratios (see PROFILES in prices.js), so every money function takes them.
+export const STANDARD_RATIOS = Object.freeze({ 24: 1, 22: 22 / 24, 21: 21 / 24, 18: 18 / 24, 14: 14 / 24 });
 
 // 24K price per gram in local currency.
 export function gramPrice24(spotUsdPerOz, fx, adjustPct = 0) {
@@ -15,7 +22,7 @@ export function gramPrice24(spotUsdPerOz, fx, adjustPct = 0) {
   return (spotUsdPerOz / TROY_OUNCE_G) * fx * (1 + (adjustPct || 0) / 100);
 }
 
-export const karatPrice = (p24, k) => p24 * purity(k);
+export const karatPrice = (p24, k, ratios = STANDARD_RATIOS) => p24 * (ratios[k] ?? purity(k));
 
 // Accepts Arabic-Indic / Persian digits, Arabic decimal separator and
 // thousands separators. Returns NaN for empty or invalid input.
@@ -46,12 +53,12 @@ function cleanItems(items) {
     .filter((it) => pos(it.w) && KARATS.concat(14).includes(it.k));
 }
 
-function goldOf(items, p24) {
+function goldOf(items, p24, ratios) {
   let weight = 0, pure = 0, gold = 0;
   for (const it of items) {
     weight += it.w;
     pure += it.w * purity(it.k);
-    gold += it.w * karatPrice(p24, it.k);
+    gold += it.w * karatPrice(p24, it.k, ratios);
   }
   return { weight, pure, gold };
 }
@@ -60,11 +67,11 @@ function goldOf(items, p24) {
 // vatBasis: 'full'   VAT on gold + making (KSA, UAE, Bahrain, Oman jewellery)
 //           'making' VAT on the making charge only
 //           'none'
-export function analyzeInvoice({ items, total, vatRate = 0, vatIncluded = true, vatBasis = 'full', p24 }) {
+export function analyzeInvoice({ items, total, vatRate = 0, vatIncluded = true, vatBasis = 'full', p24, ratios }) {
   const list = cleanItems(items);
   const T = parseNum(total);
   if (!list.length || !pos(T) || !pos(p24)) return null;
-  const { weight, pure, gold } = goldOf(list, p24);
+  const { weight, pure, gold } = goldOf(list, p24, ratios);
   const v = vatBasis === 'none' ? 0 : vatRate || 0;
   let making, vat, paid;
   if (vatBasis === 'making') {
@@ -88,12 +95,12 @@ export function analyzeInvoice({ items, total, vatRate = 0, vatIncluded = true, 
 
 // "What should this piece cost?" — build a price from weight + making.
 // makingMode: 'perGram' | 'total' | 'percent'
-export function pricePieces({ items, vatRate = 0, vatBasis = 'full', p24, makingMode = 'perGram' }) {
+export function pricePieces({ items, vatRate = 0, vatBasis = 'full', p24, makingMode = 'perGram', ratios }) {
   const list = cleanItems(items);
   if (!list.length || !pos(p24)) return null;
   let weight = 0, pure = 0, gold = 0, making = 0;
   const rows = list.map((it) => {
-    const g = it.w * karatPrice(p24, it.k);
+    const g = it.w * karatPrice(p24, it.k, ratios);
     const m = parseNum(it.m);
     let mk = 0;
     if (Number.isFinite(m) && m >= 0) {
@@ -118,10 +125,10 @@ export function pricePieces({ items, vatRate = 0, vatBasis = 'full', p24, making
 
 // Selling old gold: market melt value, and — if the shop made an offer —
 // how much it is deducting.
-export function sellGold({ items, offer, p24 }) {
+export function sellGold({ items, offer, p24, ratios }) {
   const list = cleanItems(items);
   if (!list.length || !pos(p24)) return null;
-  const { weight, pure, gold } = goldOf(list, p24);
+  const { weight, pure, gold } = goldOf(list, p24, ratios);
   const O = parseNum(offer);
   const res = { weight, pure, gold, offer: null };
   if (pos(O)) {
@@ -135,9 +142,9 @@ export function sellGold({ items, offer, p24 }) {
   return res;
 }
 
-export function zakat({ items, p24, nisab = NISAB_GRAMS, rate = ZAKAT_RATE }) {
+export function zakat({ items, p24, nisab = NISAB_GRAMS, rate = ZAKAT_RATE, ratios }) {
   const list = cleanItems(items);
-  const { weight, pure, gold } = goldOf(list, pos(p24) ? p24 : 0);
+  const { weight, pure, gold } = goldOf(list, pos(p24) ? p24 : 0, ratios);
   const due = pure >= nisab;
   return {
     weight, pure, value: gold, nisab,

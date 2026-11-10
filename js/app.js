@@ -1,11 +1,11 @@
 import {
-  KARATS, TROY_OUNCE_G, NISAB_GRAMS, parseNum, gramPrice24, karatPrice, analyzeInvoice,
+  KARATS, TROY_OUNCE_G, NISAB_GRAMS, parseNum, karatPrice, analyzeInvoice,
   pricePieces, sellGold, zakat, convertKarat,
 } from './calc.js';
-import { CURRENCIES, fetchSpot, fetchFx, fetchDay } from './prices.js';
+import { CURRENCIES, PROFILES, fetchSpot, fetchFx, fetchDay } from './prices.js';
 import { load, save, DEFAULT_SETTINGS, uid } from './store.js';
 
-export const BUILD = '2026.11.10-1';
+export const BUILD = '2026.11.10-2';
 
 /* ======================================================================
    State
@@ -37,6 +37,16 @@ const S = {
   vaultFilter: 'all',
 };
 
+// Settings saved before pricing profiles existed: switch to the Delmon
+// formula and drop any manual % that was calibrated against the old one.
+(() => {
+  const saved = load('settings', null);
+  if (saved && !('profile' in saved)) {
+    S.settings.adjustPct = 0;
+    save('settings', S.settings);
+  }
+})();
+
 const cur = () => CURRENCIES[S.settings.currency] || CURRENCIES.BHD;
 const defK = () => S.settings.defaultKarat;
 
@@ -46,16 +56,30 @@ function fxRate() {
   return S.fx[S.settings.currency]?.rate || c.approx;
 }
 
+// The active pricing formula. A dealer profile only applies in its own currency.
+function profile() {
+  const p = PROFILES[S.settings.profile];
+  return p && (!p.currency || p.currency === S.settings.currency) ? p : PROFILES.standard;
+}
+const ratios = () => profile().ratios;
+const kp = (p, k) => karatPrice(p, k, ratios());
+
+// 24K gram price from the formula alone, before the user's adjustment.
+function rawP24(usd = S.price?.usd, fx = fxRate()) {
+  return usd > 0 && fx > 0 ? profile().p24(usd, fx) : null;
+}
+
 // Market 24K gram price (with the user's adjustment) — never the manual one.
 function marketP24(usd = S.price?.usd) {
-  return gramPrice24(usd, fxRate(), S.settings.adjustPct);
+  const raw = rawP24(usd);
+  return raw ? raw * (1 + (S.settings.adjustPct || 0) / 100) : null;
 }
 
 function p24() {
   const st = S.settings;
   if (st.priceMode === 'manual') {
     const v = parseNum(st.manualPrice);
-    if (v > 0) return (v * 24) / st.manualKarat;
+    if (v > 0) return v / (ratios()[st.manualKarat] ?? st.manualKarat / 24);
   }
   return marketP24();
 }
@@ -288,19 +312,18 @@ const histMiss = new Set();
 function dayP24(rec) {
   const code = S.settings.currency;
   const c = CURRENCIES[code];
-  let ozLocal;
-  if (c.peg) ozLocal = rec.usd * c.peg;
-  else ozLocal = rec[code.toLowerCase()] || rec.usd * fxRate();
-  return (ozLocal / TROY_OUNCE_G) * (1 + (S.settings.adjustPct || 0) / 100);
+  // That day's exchange rate for floating currencies, if the record has it.
+  const fx = c.peg || (rec[code.toLowerCase()] ? rec[code.toLowerCase()] / rec.usd : fxRate());
+  return rawP24(rec.usd, fx) * (1 + (S.settings.adjustPct || 0) / 100);
 }
 
 function chartPoints(k) {
   const r = RANGES.find((x) => x.days === S.range) || RANGES[1];
   const pts = rangeDates(r.days, r.step)
     .filter((d) => S.hist[d])
-    .map((d) => ({ t: Date.parse(`${d}T00:00:00Z`), v: karatPrice(dayP24(S.hist[d]), k) }));
+    .map((d) => ({ t: Date.parse(`${d}T00:00:00Z`), v: kp(dayP24(S.hist[d]), k) }));
   const live = marketP24();
-  if (live) pts.push({ t: S.price.ts || Date.now(), v: karatPrice(live, k), live: true });
+  if (live) pts.push({ t: S.price.ts || Date.now(), v: kp(live, k), live: true });
   return pts;
 }
 
@@ -484,7 +507,7 @@ const statusLine = () => `<div class="status" data-status><i class="dot"></i><sp
 function chipHTML() {
   const p = p24();
   const k = calcK();
-  return p ? `<span class="muted">عيار ${num(k)}</span> ${money(karatPrice(p, k))}` : '<span class="muted">لا يوجد سعر</span>';
+  return p ? `<span class="muted">عيار ${num(k)}</span> ${money(kp(p, k))}` : '<span class="muted">لا يوجد سعر</span>';
 }
 
 const karatSeg = (name, value, extra = '') => `
@@ -544,17 +567,17 @@ function paintPricesLive(dir) {
   const daily = S.price?.daily;
   const manual = S.settings.priceMode === 'manual' && parseNum(S.settings.manualPrice) > 0;
   if (!manual && daily?.usd && S.price?.usd) {
-    const now = karatPrice(marketP24(), k);
-    const then = karatPrice(marketP24(daily.usd), k);
+    const now = kp(marketP24(), k);
+    const then = kp(marketP24(daily.usd), k);
     const d = now - then;
     const cls = d >= 0 ? 'up' : 'down';
     const when = daily.date === isoDay(new Date()) ? 'اليوم' : 'منذ أمس';
     change = `<div class="hero-change ${cls}">${d >= 0 ? '▲' : '▼'} ${num(fmt(Math.abs(d), c.dec))} <span>(${num(fmtPct(Math.abs(d / then), 2))})</span> <span class="when">${when}</span></div>`;
   }
   hero.innerHTML = `
-    <div class="hero-eyebrow">سعر غرام الذهب عيار ${num(k)} · ${c.country}${!manual && S.settings.adjustPct ? ` · <span class="adj">معدّل ${num(`${S.settings.adjustPct > 0 ? '+' : ''}${fmt(S.settings.adjustPct, 2)}%`)}</span>` : ''}</div>
+    <div class="hero-eyebrow">سعر غرام الذهب عيار ${num(k)} · ${manual ? c.country : profile() === PROFILES.standard ? `${c.country} · السعر العالمي` : `تسعيرة ${profile().name}`}${!manual && S.settings.adjustPct ? ` · <span class="adj">معدّل ${num(`${S.settings.adjustPct > 0 ? '+' : ''}${fmt(S.settings.adjustPct, 2)}%`)}</span>` : ''}</div>
     <div class="hero-price ${dir > 0 ? 'tick-up' : dir < 0 ? 'tick-down' : ''}">
-      ${p ? `${num(fmt(karatPrice(p, k), c.dec))}<span class="cur">${c.sym}</span>` : '<span class="shimmer wide"></span>'}
+      ${p ? `${num(fmt(kp(p, k), c.dec))}<span class="cur">${c.sym}</span>` : '<span class="shimmer wide"></span>'}
     </div>
     ${change}
     <div class="hero-karats">
@@ -567,7 +590,7 @@ function paintPricesLive(dir) {
     <button type="button" class="karat-row ${x === k ? 'on' : ''}" data-hk="${x}">
       <span class="kbadge">${num(x)}</span>
       <span class="kname">عيار ${num(x)} <span class="muted small">${num(KARAT_FINENESS[x])}</span></span>
-      <span class="kprice">${p ? money(karatPrice(p, x)) : '—'}</span>
+      <span class="kprice">${p ? money(kp(p, x)) : '—'}</span>
     </button>`).join('');
 
   const units = [
@@ -578,7 +601,7 @@ function paintPricesLive(dir) {
     ['كيلو', 1000, 24],
   ];
   document.getElementById('px-units').innerHTML = units.map(([n, g, kk]) => `
-    <div class="unit-row"><span>${n} <span class="muted small">${num(fmtW(g))} غ · ${num(kk)}</span></span><b>${p ? money(karatPrice(p, kk) * g) : '—'}</b></div>`).join('');
+    <div class="unit-row"><span>${n} <span class="muted small">${num(fmtW(g))} غ · ${num(kk)}</span></span><b>${p ? money(kp(p, kk) * g) : '—'}</b></div>`).join('');
 
   const st = S.settings;
   const fx = fxRate();
@@ -586,6 +609,7 @@ function paintPricesLive(dir) {
   document.getElementById('px-meta').innerHTML = `
     <div class="meta-row"><span>الأونصة عالميًا</span><b dir="ltr">${S.price ? `$${num(fmt(S.price.usd, 2))}` : '—'}</b></div>
     ${st.currency !== 'USD' ? `<div class="meta-row"><span>سعر الصرف</span><b>${num(`1$ = ${fmt(fx, 4)}`)} ${c.sym} <span class="muted small">· ${fxKind}</span></b></div>` : ''}
+    ${manual ? '' : `<div class="meta-row"><span>طريقة التسعير</span><b>${profile().name}</b></div>`}
     ${S.price?.sources?.length ? `<div class="meta-row"><span>المصادر</span><b class="small">${S.price.sources.map(esc).join(' · ')}</b></div>` : ''}
     ${st.adjustPct ? `<div class="meta-row"><span>تعديل السعر</span><b>${num(`${st.adjustPct > 0 ? '+' : ''}${fmt(st.adjustPct, 2)}٪`)}</b></div>` : ''}
     ${manual ? `<p class="note">تستخدم سعرًا يدويًا: ${money(parseNum(st.manualPrice))} لغرام عيار ${num(st.manualKarat)}.</p>` : ''}
@@ -605,31 +629,31 @@ function paintPricesLive(dir) {
 function openCalibrate() {
   const c = cur();
   let k = S.heroK || defK();
-  const raw24 = () => gramPrice24(S.price?.usd, fxRate(), 0);
+  const raw24 = () => rawP24();
   if (!raw24()) return toast('انتظر حتى يصل السعر المباشر أولًا');
   const had = S.settings.adjustPct;
   openSheet(`
     <h2 class="sheet-title">طابق السعر</h2>
-    <p class="note">اكتب سعر الغرام كما تشوفه <b>الآن</b> في المحل أو الحساب اللي تثق فيه. التطبيق يحسب الفرق عن السعر العالمي ويطبّقه على كل العيارات، ويبقى السعر يتحرك مع السوق.</p>
+    <p class="note">اكتب سعر الغرام كما تشوفه <b>الآن</b> في المحل أو الحساب اللي تثق فيه. التطبيق يحسب الفرق عن «${profile().name}» ويطبّقه على كل العيارات، ويبقى السعر يتحرك مع السوق.</p>
     <span class="label">العيار</span>
     ${karatSeg('ck', k)}
     <label class="field"><span class="label">السعر اللي تشوفه لغرام عيار <span data-c="k">${num(k)}</span></span>
       <span class="input big"><input inputmode="decimal" autocomplete="off" data-c="v" placeholder="0.000"><span class="unit">${c.sym}</span></span></label>
     <div class="cal-out" data-c="out"></div>
     <button class="btn primary block" data-c="ok">${icon('check', 18)} طابق</button>
-    ${had ? `<button class="btn ghost block" data-c="reset">الرجوع للسعر العالمي بدون تعديل (الحالي ${num(`${had > 0 ? '+' : ''}${fmt(had, 2)}%`)})</button>` : ''}`,
+    ${had ? `<button class="btn ghost block" data-c="reset">الرجوع لـ«${profile().name}» بدون تعديل (الحالي ${num(`${had > 0 ? '+' : ''}${fmt(had, 2)}%`)})</button>` : ''}`,
   (sheet) => {
     const input = sheet.querySelector('[data-c="v"]');
     const out = sheet.querySelector('[data-c="out"]');
     const pct = () => {
       const v = parseNum(input.value);
-      return v > 0 ? (v / karatPrice(raw24(), k) - 1) * 100 : NaN;
+      return v > 0 ? (v / kp(raw24(), k) - 1) * 100 : NaN;
     };
     const paint = () => {
-      const market = karatPrice(raw24(), k);
+      const market = kp(raw24(), k);
       const p = pct();
       out.innerHTML = `
-        <div class="meta-row"><span>السعر العالمي الآن لعيار ${num(k)}</span><b>${money(market)}</b></div>
+        <div class="meta-row"><span>${profile().name} الآن لعيار ${num(k)}</span><b>${money(market)}</b></div>
         ${Number.isFinite(p) ? `<div class="meta-row"><span>الفرق</span><b class="${Math.abs(p) > 5 ? 'down' : ''}">${num(`${p > 0 ? '+' : ''}${fmt(p, 2)}%`)}</b></div>
         ${Math.abs(p) > 5 ? '<p class="note warn-text">الفرق كبير — تأكد من العيار، وإن السعر للغرام الواحد وبالدينار.</p>' : ''}` : ''}`;
     };
@@ -655,7 +679,7 @@ function openCalibrate() {
       } else if (b.dataset.c === 'reset') {
         setSetting('adjustPct', '0', false);
         closeSheet();
-        toast('رجعنا للسعر العالمي');
+        toast(`رجعنا لـ«${profile().name}»`);
         rerenderCurrent();
       }
     };
@@ -689,7 +713,7 @@ const persistCalc = () => save('calc', S.calc);
 
 function calcP24() {
   const o = parseNum(S.calc.override);
-  if (o > 0) return (o * 24) / calcK();
+  if (o > 0) return o / (ratios()[calcK()] ?? calcK() / 24);
   return p24();
 }
 
@@ -765,7 +789,7 @@ function renderCalc() {
         <summary>المحل يستخدم سعر ذهب مختلف؟</summary>
         <label class="field">
           <span class="label">سعر غرام عيار ${num(calcK())} عند المحل</span>
-          <span class="input"><input inputmode="decimal" autocomplete="off" placeholder="${p24() ? fmt(karatPrice(p24(), calcK()), c.dec) : ''}" data-g="override" value="${esc(C.override)}"><span class="unit">${c.sym}</span></span>
+          <span class="input"><input inputmode="decimal" autocomplete="off" placeholder="${p24() ? fmt(kp(p24(), calcK()), c.dec) : ''}" data-g="override" value="${esc(C.override)}"><span class="unit">${c.sym}</span></span>
         </label>
       </details>
     </section>
@@ -829,7 +853,7 @@ function renderCalc() {
 
 function calcResult() {
   const C = S.calc, st = S.settings;
-  const base = { items: C.items, p24: calcP24() };
+  const base = { items: C.items, p24: calcP24(), ratios: ratios() };
   if (C.mode === 'analyze') return analyzeInvoice({ ...base, total: C.total, vatRate: st.vatRate, vatIncluded: C.vatIncluded, vatBasis: st.vatBasis });
   if (C.mode === 'price') return pricePieces({ ...base, vatRate: st.vatRate, vatBasis: st.vatBasis, makingMode: C.makingMode });
   return sellGold({ ...base, offer: C.offer });
@@ -941,7 +965,7 @@ function summary(e) {
     pieces: items.map((it) => `${fmtW(parseNum(it.w))} غ · عيار ${it.k}`),
     hero: null,
     rows: [['قيمة الذهب', m(r.gold)]],
-    foot: `سعر غرام عيار ${k}: ${m(karatPrice(e.p24, k))} · ${dateFmt(e.ts || Date.now(), { day: 'numeric', month: 'long', year: 'numeric' })}`,
+    foot: `سعر غرام عيار ${k}: ${m(karatPrice(e.p24, k, e.ratios || ratios()))} · ${dateFmt(e.ts || Date.now(), { day: 'numeric', month: 'long', year: 'numeric' })}`,
   };
   if (e.mode === 'analyze' && !r.belowGold) {
     out.hero = ['المصنعية لكل غرام', m(r.makingPerGram), `${LEVELS[r.level].label} · ${fmtPct(r.makingPct)} من قيمة الذهب`];
@@ -1068,7 +1092,7 @@ function openSaveSheet(existing) {
           items: C.items.filter((it) => parseNum(it.w) > 0).map((it) => ({ w: parseNum(it.w), k: it.k, m: it.m })),
           total: C.total, offer: C.offer, vatIncluded: C.vatIncluded, makingMode: C.makingMode,
           vatRate: S.settings.vatRate, vatBasis: S.settings.vatBasis,
-          currency: S.settings.currency, p24: calcP24(), result: r,
+          currency: S.settings.currency, p24: calcP24(), ratios: { ...ratios() }, result: r,
         });
       }
       save('entries', S.entries);
@@ -1107,7 +1131,10 @@ function holdings() {
       paidWeight += e.items.reduce((s, it) => s + (it.w * it.k) / 24, 0);
     }
   }
-  return { owned, byK, weight, pure, paid, paidPure: paidWeight };
+  const valueOf = (P, filter) => owned
+    .filter(filter || (() => true))
+    .reduce((s, e) => s + e.items.reduce((t, it) => t + it.w * kp(P, it.k), 0), 0);
+  return { owned, byK, weight, pure, paid, paidPure: paidWeight, valueOf };
 }
 
 function renderVault() {
@@ -1132,8 +1159,8 @@ function paintVault() {
   const P = p24();
   const h = holdings();
   if (h.owned.length) {
-    const value = P ? h.pure * P : null;
-    const paidNowValue = P ? h.paidPure * P : null;
+    const value = P ? h.valueOf(P) : null;
+    const paidNowValue = P ? h.valueOf(P, (e) => e.currency === S.settings.currency && entryPaid(e) > 0) : null;
     const diff = paidNowValue != null && h.paid ? paidNowValue - h.paid : null;
     sum.innerHTML = `
       <div class="hero vault-hero">
@@ -1193,8 +1220,7 @@ function openEntry(id) {
   if (!e) return;
   const sameCur = e.currency === S.settings.currency;
   const P = p24();
-  const pure = e.items.reduce((s, it) => s + (it.w * it.k) / 24, 0);
-  const nowVal = P ? pure * P : null;
+  const nowVal = P ? e.items.reduce((s, it) => s + it.w * kp(P, it.k), 0) : null;
   const prevCur = S.settings.currency;
   // Render the stored result in the currency it was saved in.
   S.settings.currency = e.currency;
@@ -1318,9 +1344,13 @@ function renderTools() {
           <span class="input"><input inputmode="decimal" data-set="manualPrice" placeholder="0.00" value="${esc(st.manualPrice)}"><span class="unit">${cur().sym}</span></span>
           <p class="note">بقية العيارات تُحسب تلقائيًا من هذا السعر.</p>
         </div>` : `
-        <label class="field"><span class="label">تعديل على السعر العالمي <span class="muted">(اختياري)</span></span>
+        ${st.currency === 'BHD' ? `
+        <span class="label">طريقة التسعير</span>
+        ${seg('pf', ['delmon', 'standard'].map((id) => [id, PROFILES[id].name]), profile() === PROFILES.standard ? 'standard' : st.profile)}
+        <p class="note">${profile().desc}</p>` : ''}
+        <label class="field"><span class="label">تعديل إضافي على السعر <span class="muted">(اختياري)</span></span>
           <span class="input"><input inputmode="decimal" data-set="adjustPct" placeholder="0" value="${st.adjustPct || ''}"><span class="unit">٪</span></span></label>
-        <p class="note">لو كانت أسعار السوق المحلي أعلى أو أقل قليلًا من السعر العالمي، اكتب الفرق كنسبة (مثل 0.5 أو ‎-0.3)، أو خلّ التطبيق يحسبها لك:</p>
+        <p class="note">لو كانت أسعار المحل اللي تتعامل معه أعلى أو أقل قليلًا من هذي التسعيرة، اكتب الفرق كنسبة (مثل 0.5 أو ‎-0.3)، أو خلّ التطبيق يحسبها لك:</p>
         <button class="btn block" data-action="calibrate">${icon('edit', 18)} طابق مع سعر محل أو حساب</button>`}
 
       <span class="label">الأرقام</span>
@@ -1378,6 +1408,13 @@ function renderTools() {
       b.parentElement.querySelectorAll('button').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
       paintConv();
     }
+    else if (d.pf) {
+      if (d.pf !== S.settings.profile) {
+        S.settings.adjustPct = 0; // a % matched under one formula is wrong under another
+        setSetting('profile', d.pf, true);
+        toast(`التسعير الآن: ${PROFILES[d.pf].name}`);
+      }
+    }
     else if (d.dk) setSetting('defaultKarat', Number(d.dk), true);
     else if (d.mk) setSetting('manualKarat', Number(d.mk), true);
     else if (d.pm) setSetting('priceMode', d.pm, true);
@@ -1419,7 +1456,7 @@ function paintZakat() {
   const box = document.getElementById('zk-res');
   if (!box) return;
   const P = p24();
-  const z = zakat({ items: S.zakatItems, p24: P });
+  const z = zakat({ items: S.zakatItems, p24: P, ratios: ratios() });
   if (!(z.weight > 0)) { box.innerHTML = ''; return; }
   const prog = Math.min(z.pure / z.nisab, 1) * 100;
   box.innerHTML = `
@@ -1449,7 +1486,7 @@ function paintConv() {
       <span class="eq">=</span>
       <div><b>${grams(out)}</b> <span class="muted">عيار ${num(S.conv.to)}</span></div>
     </div>
-    <p class="note">تحتوي على ${num(fmtW((w * S.conv.from) / 24))} غ ذهب صافٍ${P ? ` · قيمتها ${money(karatPrice(P, S.conv.from) * w)}` : ''}.</p>`;
+    <p class="note">تحتوي على ${num(fmtW((w * S.conv.from) / 24))} غ ذهب صافٍ${P ? ` · قيمتها ${money(kp(P, S.conv.from) * w)}` : ''}.</p>`;
 }
 
 function exportBackup() {

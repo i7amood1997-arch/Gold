@@ -4,7 +4,7 @@ import {
   parseNum, gramPrice24, karatPrice, analyzeInvoice, pricePieces, sellGold, zakat,
   convertKarat, makingLevel, TROY_OUNCE_G,
 } from '../js/calc.js';
-import { aggregate, parseAwesome, parseGoldApi, parseCurrencyApiXau } from '../js/prices.js';
+import { aggregate, parseAwesome, parseGoldApi, parseCurrencyApiXau, PROFILES } from '../js/prices.js';
 
 const near = (a, b, eps = 1e-6) => assert.ok(Math.abs(a - b) < eps, `${a} ≈ ${b}`);
 
@@ -143,4 +143,21 @@ test('source parsers', () => {
   assert.equal(c.price, 4000);
   assert.equal(c.rates.kwd, 1228);
   assert.equal(c.rates.sar, undefined);
+});
+
+test('Delmon profile reproduces delmonbars.com prices', () => {
+  // Spot 4127.188 as served by their feed on 2026-11-10.
+  const d = PROFILES.delmon;
+  const p = d.p24(4127.188);
+  near(p, 4127.188 * 1.417 / 116.64, 1e-9);
+  near(karatPrice(p, 21, d.ratios), 4127.188 * 1.417 / 132.2, 1e-9);
+  near(karatPrice(p, 22, d.ratios), p * 0.916, 1e-9);
+  near(karatPrice(p, 18, d.ratios), p * 0.75, 1e-9);
+  // Same money via the calculator: 10 g of 21K, no VAT, no making.
+  const r = analyzeInvoice({ items: [{ w: 10, k: 21 }], total: 500, vatBasis: 'none', p24: p, ratios: d.ratios });
+  near(r.gold, 10 * 4127.188 * 1.417 / 132.2, 1e-9);
+  // Pure weight still uses true fineness.
+  near(r.pure, 8.75);
+  // Standard profile matches the textbook formula.
+  near(PROFILES.standard.p24(3110.34768, 0.376), 37.6, 1e-9);
 });

@@ -12,7 +12,29 @@
 //     no exchange-rate API needed. Floating currencies use the median of two
 //     FX feeds, cached for a few hours.
 
-import { median } from './calc.js';
+import { median, TROY_OUNCE_G, STANDARD_RATIOS } from './calc.js';
+
+// How a local price is built from the global ounce price (USD).
+//  standard — ounce ÷ 31.1035 g × exchange rate, karats by fineness.
+//  delmon   — Delmon Bars (Bahrain) dealer formula, read from their public
+//             price page: 24K = oz × 1.417 ÷ 116.64, 21K = oz × 1.417 ÷ 132.2,
+//             22K = 24K × 0.916, 18K = 24K × 0.750. If their page changes
+//             these constants, update them here.
+export const PROFILES = {
+  standard: {
+    name: 'السعر العالمي',
+    desc: 'المعادلة القياسية: الأونصة ÷ 31.1035 × سعر الصرف، والعيارات حسب نقاوتها.',
+    p24: (usd, fx) => (usd / TROY_OUNCE_G) * fx,
+    ratios: STANDARD_RATIOS,
+  },
+  delmon: {
+    name: 'دلمون للسبائك',
+    desc: 'نفس معادلة موقع دلمون للسبائك في البحرين، وتشمل هامش التاجر.',
+    currency: 'BHD',
+    p24: (usd) => (usd * 1.417) / 116.64,
+    ratios: Object.freeze({ 24: 1, 22: 0.916, 21: 116.64 / 132.2, 18: 0.75, 14: 14 / 24 }),
+  },
+};
 
 export const CURRENCIES = {
   BHD: { name: 'دينار بحريني', sym: 'د.ب', dec: 3, vat: 0.1, basis: 'full', peg: 0.376, country: 'البحرين' },

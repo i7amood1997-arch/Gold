@@ -27,6 +27,7 @@ export const DEFAULT_SETTINGS = {
   vatBasis: 'full',
   defaultKarat: 21,
   adjustPct: 0,
+  profile: 'delmon', // pricing formula, see PROFILES in prices.js
   priceMode: 'auto', // 'auto' | 'manual'
   manualKarat: 21,
   manualPrice: '',
