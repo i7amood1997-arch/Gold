@@ -5,7 +5,7 @@ import {
 import { CURRENCIES, fetchSpot, fetchFx, fetchDay } from './prices.js';
 import { load, save, DEFAULT_SETTINGS, uid } from './store.js';
 
-export const BUILD = '2026.11.09-2';
+export const BUILD = '2026.11.10-1';
 
 /* ======================================================================
    State
@@ -529,6 +529,7 @@ function renderPrices() {
     if (t.dataset.action === 'refresh') refresh({ userAsked: true });
     else if (t.dataset.hk) { S.heroK = Number(t.dataset.hk); renderPrices(); }
     else if (t.dataset.range) { S.range = Number(t.dataset.range); save('range', S.range); renderPrices(); }
+    else if (t.dataset.action === 'calibrate') openCalibrate();
     else if (t.dataset.action === 'go-settings') { location.hash = '#tools'; setTimeout(() => document.getElementById('settings')?.scrollIntoView({ behavior: 'smooth' }), 60); }
   };
 }
@@ -551,7 +552,7 @@ function paintPricesLive(dir) {
     change = `<div class="hero-change ${cls}">${d >= 0 ? '▲' : '▼'} ${num(fmt(Math.abs(d), c.dec))} <span>(${num(fmtPct(Math.abs(d / then), 2))})</span> <span class="when">${when}</span></div>`;
   }
   hero.innerHTML = `
-    <div class="hero-eyebrow">سعر غرام الذهب عيار ${num(k)} · ${c.country}</div>
+    <div class="hero-eyebrow">سعر غرام الذهب عيار ${num(k)} · ${c.country}${!manual && S.settings.adjustPct ? ` · <span class="adj">معدّل ${num(`${S.settings.adjustPct > 0 ? '+' : ''}${fmt(S.settings.adjustPct, 2)}%`)}</span>` : ''}</div>
     <div class="hero-price ${dir > 0 ? 'tick-up' : dir < 0 ? 'tick-down' : ''}">
       ${p ? `${num(fmt(karatPrice(p, k), c.dec))}<span class="cur">${c.sym}</span>` : '<span class="shimmer wide"></span>'}
     </div>
@@ -588,9 +589,84 @@ function paintPricesLive(dir) {
     ${S.price?.sources?.length ? `<div class="meta-row"><span>المصادر</span><b class="small">${S.price.sources.map(esc).join(' · ')}</b></div>` : ''}
     ${st.adjustPct ? `<div class="meta-row"><span>تعديل السعر</span><b>${num(`${st.adjustPct > 0 ? '+' : ''}${fmt(st.adjustPct, 2)}٪`)}</b></div>` : ''}
     ${manual ? `<p class="note">تستخدم سعرًا يدويًا: ${money(parseNum(st.manualPrice))} لغرام عيار ${num(st.manualKarat)}.</p>` : ''}
+    ${manual ? '' : `<button class="calib" data-action="calibrate">${icon('edit', 18)}<span><b>السعر مختلف عن المحل أو الحساب اللي تتابعه؟</b><span class="muted small">اكتب السعر اللي تشوفه مرة وحدة، ويتطابق التطبيق معه ويتابع السوق مباشرة</span></span></button>`}
     <button class="link" data-action="go-settings">تغيير العملة أو مصدر السعر ←</button>`;
   paintStatus();
   paintChart();
+}
+
+/* ======================================================================
+   Calibrate: match a local shop / account price
+   ====================================================================== */
+
+// Local dealers quote the global price plus (or minus) their own margin.
+// The user types one price they trust; we store the gap as a percentage so
+// the app keeps following the live market with that same margin.
+function openCalibrate() {
+  const c = cur();
+  let k = S.heroK || defK();
+  const raw24 = () => gramPrice24(S.price?.usd, fxRate(), 0);
+  if (!raw24()) return toast('انتظر حتى يصل السعر المباشر أولًا');
+  const had = S.settings.adjustPct;
+  openSheet(`
+    <h2 class="sheet-title">طابق السعر</h2>
+    <p class="note">اكتب سعر الغرام كما تشوفه <b>الآن</b> في المحل أو الحساب اللي تثق فيه. التطبيق يحسب الفرق عن السعر العالمي ويطبّقه على كل العيارات، ويبقى السعر يتحرك مع السوق.</p>
+    <span class="label">العيار</span>
+    ${karatSeg('ck', k)}
+    <label class="field"><span class="label">السعر اللي تشوفه لغرام عيار <span data-c="k">${num(k)}</span></span>
+      <span class="input big"><input inputmode="decimal" autocomplete="off" data-c="v" placeholder="0.000"><span class="unit">${c.sym}</span></span></label>
+    <div class="cal-out" data-c="out"></div>
+    <button class="btn primary block" data-c="ok">${icon('check', 18)} طابق</button>
+    ${had ? `<button class="btn ghost block" data-c="reset">الرجوع للسعر العالمي بدون تعديل (الحالي ${num(`${had > 0 ? '+' : ''}${fmt(had, 2)}%`)})</button>` : ''}`,
+  (sheet) => {
+    const input = sheet.querySelector('[data-c="v"]');
+    const out = sheet.querySelector('[data-c="out"]');
+    const pct = () => {
+      const v = parseNum(input.value);
+      return v > 0 ? (v / karatPrice(raw24(), k) - 1) * 100 : NaN;
+    };
+    const paint = () => {
+      const market = karatPrice(raw24(), k);
+      const p = pct();
+      out.innerHTML = `
+        <div class="meta-row"><span>السعر العالمي الآن لعيار ${num(k)}</span><b>${money(market)}</b></div>
+        ${Number.isFinite(p) ? `<div class="meta-row"><span>الفرق</span><b class="${Math.abs(p) > 5 ? 'down' : ''}">${num(`${p > 0 ? '+' : ''}${fmt(p, 2)}%`)}</b></div>
+        ${Math.abs(p) > 5 ? '<p class="note warn-text">الفرق كبير — تأكد من العيار، وإن السعر للغرام الواحد وبالدينار.</p>' : ''}` : ''}`;
+    };
+    paint();
+    input.focus({ preventScroll: true });
+    input.oninput = paint;
+    sheet.onclick = (ev) => {
+      const b = ev.target.closest('button');
+      if (!b) return;
+      if (b.dataset.ck) {
+        k = Number(b.dataset.ck);
+        sheet.querySelectorAll('[data-ck]').forEach((x) => x.setAttribute('aria-checked', String(x === b)));
+        sheet.querySelector('[data-c="k"]').innerHTML = num(k);
+        paint();
+      } else if (b.dataset.c === 'ok') {
+        const p = pct();
+        if (!Number.isFinite(p)) return toast('اكتب السعر أولًا');
+        if (Math.abs(p) > 20) return toast('الفرق أكبر من 20% — تأكد من السعر');
+        setSetting('adjustPct', String(Math.round(p * 10000) / 10000), false);
+        closeSheet();
+        toast(`تم — الفرق ${p > 0 ? '+' : ''}${fmt(p, 2)}% ويتابع السوق مباشرة`);
+        rerenderCurrent();
+      } else if (b.dataset.c === 'reset') {
+        setSetting('adjustPct', '0', false);
+        closeSheet();
+        toast('رجعنا للسعر العالمي');
+        rerenderCurrent();
+      }
+    };
+  });
+}
+
+function rerenderCurrent() {
+  const y = window.scrollY;
+  ({ prices: renderPrices, calc: renderCalc, vault: renderVault, tools: renderTools })[S.tab]();
+  paintStatus();
+  window.scrollTo(0, y);
 }
 
 /* ======================================================================
@@ -1244,7 +1320,8 @@ function renderTools() {
         </div>` : `
         <label class="field"><span class="label">تعديل على السعر العالمي <span class="muted">(اختياري)</span></span>
           <span class="input"><input inputmode="decimal" data-set="adjustPct" placeholder="0" value="${st.adjustPct || ''}"><span class="unit">٪</span></span></label>
-        <p class="note">لو كانت أسعار السوق المحلي أعلى أو أقل قليلًا من السعر العالمي، اكتب الفرق كنسبة (مثل 0.5 أو ‎-0.3).</p>`}
+        <p class="note">لو كانت أسعار السوق المحلي أعلى أو أقل قليلًا من السعر العالمي، اكتب الفرق كنسبة (مثل 0.5 أو ‎-0.3)، أو خلّ التطبيق يحسبها لك:</p>
+        <button class="btn block" data-action="calibrate">${icon('edit', 18)} طابق مع سعر محل أو حساب</button>`}
 
       <span class="label">الأرقام</span>
       ${seg('dg', [['latn', '123'], ['arab', '١٢٣']], st.digits)}
@@ -1307,6 +1384,7 @@ function renderTools() {
     else if (d.dg) setSetting('digits', d.dg, true);
     else if (d.th) setSetting('theme', d.th, true);
     else if (d.action === 'export') exportBackup();
+    else if (d.action === 'calibrate') openCalibrate();
   };
 }
 

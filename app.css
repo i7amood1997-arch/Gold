@@ -251,6 +251,18 @@ a { color: inherit; }
 .card-head h2 { font-size: 1rem; font-weight: 600; }
 .lead { color: var(--ink-2); font-size: 0.92rem; margin: 12px 2px 14px; }
 .note { color: var(--ink-3); font-size: 0.8rem; margin-top: 10px; line-height: 1.7; }
+.calib {
+  display: flex; gap: 12px; align-items: flex-start; width: 100%; text-align: start;
+  margin-top: 12px; padding: 14px; border-radius: 14px;
+  background: var(--gold-soft); color: var(--ink);
+}
+.calib .ic { color: var(--gold-ink); flex: none; margin-top: 2px; }
+.calib > span { display: grid; gap: 2px; }
+.calib b { font-weight: 600; font-size: 0.92rem; }
+.adj { color: var(--case-gold); }
+.cal-out { margin-top: 10px; }
+.warn-text { color: var(--warn); }
+.btn.block + .btn.block { margin-top: 8px; }
 .link { color: var(--gold-ink); font-weight: 500; font-size: 0.9rem; margin-top: 10px; }
 
 .karat-list { display: grid; gap: 2px; margin: 0 -8px; }
