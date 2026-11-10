@@ -86,12 +86,21 @@ function build(data) {
   }
 
   if (family === 'accessoryRectangular') {
-    const head = w.addText(`عيار ${KARAT}، ${data.src}${data.stale ? '، قديم' : ''}`);
-    head.font = Font.mediumSystemFont(11); head.textOpacity = 0.75;
-    const p = w.addText(`${fmt(price)} د.ب`);
-    p.font = Font.boldSystemFont(20); p.minimumScaleFactor = 0.7;
+    // Three lines sized to the ~72pt-tall slot: label, price, change + time.
+    const head = w.addText(`عيار ${KARAT}${data.stale ? '، قديم' : ''}`);
+    head.font = Font.semiboldSystemFont(12); head.textOpacity = 0.8;
+    w.addSpacer(1);
+    const row = w.addStack();
+    row.layoutHorizontally();
+    row.bottomAlignContent();
+    const p = row.addText(fmt(price));
+    p.font = Font.boldSystemFont(26); p.minimumScaleFactor = 0.7; p.lineLimit = 1;
+    row.addSpacer(4);
+    const c = row.addText('د.ب');
+    c.font = Font.semiboldSystemFont(13); c.textOpacity = 0.8;
+    w.addSpacer(1);
     const foot = w.addText(`${chg}  ${time(data.at)}`.trim());
-    foot.font = Font.systemFont(11); foot.textOpacity = 0.75;
+    foot.font = Font.mediumSystemFont(12); foot.textOpacity = 0.8;
     return w;
   }
 
@@ -114,7 +123,7 @@ function build(data) {
     const c = w.addText(`${delta >= 0 ? '+' : '-'}${fmt(Math.abs(delta))}  ${chg}`);
     c.font = Font.semiboldSystemFont(12); c.textColor = ink;
   }
-  const t = w.addText(`${data.src}، ${time(data.at)}${data.stale ? '، غير متصل' : ''}`);
+  const t = w.addText(`${time(data.at)}${data.stale ? '، غير متصل' : ''}`);
   t.font = Font.systemFont(11); t.textColor = ink; t.textOpacity = 0.7;
   return w;
 }
