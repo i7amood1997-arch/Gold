@@ -5,8 +5,10 @@ import {
 import { CURRENCIES, PROFILES, fetchSpot, fetchFx, fetchDay } from './prices.js';
 import { load, save, DEFAULT_SETTINGS, uid } from './store.js';
 import { ICONS } from './icons.js';
+import { weekRange, HISTORY_DAYS, MODEL } from './forecast.js';
+import { EVENTS, KINDS, EVENTS_UNTIL } from './events.js';
 
-export const BUILD = '2026.11.10-6';
+export const BUILD = '2026.11.19-1';
 
 /* ======================================================================
    State
@@ -336,12 +338,15 @@ function rangeDates(days, step) {
 let histLoading = false;
 async function ensureHistory() {
   const r = RANGES.find((x) => x.days === S.range) || RANGES[1];
-  const missing = rangeDates(r.days, r.step).filter((d) => !S.hist[d] && !histMiss.has(d));
+  // The chart's own dates first, then every day the weekly range needs.
+  const want = [...new Set([...rangeDates(r.days, r.step).reverse(), ...rangeDates(HISTORY_DAYS, 1).reverse()])];
+  const missing = want.filter((d) => !S.hist[d] && !histMiss.has(d));
   if (!missing.length || histLoading) return;
   histLoading = true;
   paintChart();
-  for (let i = 0; i < missing.length; i += 6) {
-    const batch = missing.slice(i, i + 6);
+  paintWeek();
+  for (let i = 0; i < missing.length; i += 8) {
+    const batch = missing.slice(i, i + 8);
     const got = await Promise.allSettled(batch.map((d) => fetchDay(d)));
     got.forEach((g, j) => {
       if (g.status === 'fulfilled') {
@@ -349,6 +354,7 @@ async function ensureHistory() {
         S.hist[batch[j]] = { usd, kwd: rates?.kwd, egp: rates?.egp };
       } else histMiss.add(batch[j]);
     });
+    if (i % 48 === 0) { paintChart(); paintWeek(); }
   }
   // Keep the cache bounded to ~400 days.
   const keys = Object.keys(S.hist).sort();
@@ -356,6 +362,16 @@ async function ensureHistory() {
   save('hist', S.hist);
   histLoading = false;
   paintChart();
+  paintWeek();
+}
+
+// Weekly range for the shown karat, as prices; null until enough history.
+function weekBand(k) {
+  const r = weekRange({ hist: S.hist, events: EVENTS });
+  const base = p24();
+  if (!r || !base) return null;
+  const now = kp(base, k);
+  return { ...r, now, lowP: now * r.low, highP: now * r.high };
 }
 const histMiss = new Set();
 
@@ -379,23 +395,35 @@ function chartPoints(k) {
 
 // Shared by drawing and hit-testing. The end edge is reserved for the
 // value labels so they never sit on top of the line.
-function chartGeom(pts, w, h) {
+function chartGeom(pts, w, h, cone = null) {
   const padT = 12, padB = 24, padL = 2, padR = 44;
-  const vs = pts.map((p) => p.v);
+  const vs = pts.map((p) => p.v).concat(cone ? cone.flatMap((c) => [c.lo, c.hi]) : []);
   let lo = Math.min(...vs), hi = Math.max(...vs);
   const pad = (hi - lo) * 0.1 || hi * 0.01;
   lo -= pad; hi += pad;
-  const t0 = pts[0].t, t1 = pts[pts.length - 1].t;
+  const t0 = pts[0].t, t1 = cone ? cone[cone.length - 1].t : pts[pts.length - 1].t;
   const x = (t) => padL + ((t - t0) / (t1 - t0 || 1)) * (w - padL - padR);
   const y = (v) => padT + (1 - (v - lo) / (hi - lo)) * (h - padT - padB);
   return { padT, padB, padL, padR, lo, hi, t0, t1, x, y };
 }
 
 // Stocks-style: the line is green when the range closed higher, red when lower.
-function chartSVG(pts, w, h, trend) {
-  const { padB, padL, padR, lo, hi, t0, t1, x, y } = chartGeom(pts, w, h);
+function chartSVG(pts, w, h, trend, cone = null) {
+  const { padB, padL, padR, lo, hi, t0, t1, x, y } = chartGeom(pts, w, h, cone);
   const line = pts.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(1)},${y(p.v).toFixed(1)}`).join('');
-  const area = `${line}L${x(t1).toFixed(1)},${h - padB}L${x(t0).toFixed(1)},${h - padB}Z`;
+  const tl = pts[pts.length - 1].t;
+  const area = `${line}L${x(tl).toFixed(1)},${h - padB}L${x(t0).toFixed(1)},${h - padB}Z`;
+  // The weekly range fans out from the latest price.
+  let fan = '';
+  if (cone) {
+    const last = pts[pts.length - 1];
+    const top = cone.map((c) => `L${x(c.t).toFixed(1)},${y(c.hi).toFixed(1)}`).join('');
+    const bottom = cone.slice().reverse().map((c) => `L${x(c.t).toFixed(1)},${y(c.lo).toFixed(1)}`).join('');
+    const start = `M${x(last.t).toFixed(1)},${y(last.v).toFixed(1)}`;
+    fan = `<path d="${start}${top}${bottom}Z" class="fan"/>
+      <path d="${start}${top}" class="fan-edge"/><path d="${start}${cone.map((c) => `L${x(c.t).toFixed(1)},${y(c.lo).toFixed(1)}`).join('')}" class="fan-edge"/>
+      <line x1="${x(last.t).toFixed(1)}" x2="${x(last.t).toFixed(1)}" y1="0" y2="${h - padB}" class="now-line"/>`;
+  }
   const ticks = [lo + (hi - lo) * 0.15, lo + (hi - lo) * 0.85];
   const dec = cur().dec > 2 ? 2 : 0;
   const last = pts[pts.length - 1];
@@ -406,9 +434,11 @@ function chartSVG(pts, w, h, trend) {
       </linearGradient></defs>
       ${ticks.map((v) => `<line x1="0" x2="${w - padR + 6}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}" class="grid"/><text x="${w}" y="${(y(v) + 4).toFixed(1)}" class="axis" text-anchor="end">${fmt(v, dec)}</text>`).join('')}
       <path d="${area}" fill="url(#gfill)"/>
+      ${fan}
       <path d="${line}" class="line"/>
       <text x="${padL}" y="${h - 6}" class="axis">${dateFmt(t0, { day: 'numeric', month: 'short' })}</text>
-      <text x="${w - padR}" y="${h - 6}" class="axis" text-anchor="end">${last.live ? 'الآن' : dateFmt(t1, { day: 'numeric', month: 'short' })}</text>
+      ${cone && x(tl) < w - padR - 90 ? `<text x="${x(tl).toFixed(1)}" y="${h - 6}" class="axis" text-anchor="middle">الآن</text>` : ''}
+      <text x="${w - padR}" y="${h - 6}" class="axis" text-anchor="end">${cone ? 'بعد أسبوع' : last.live ? 'الآن' : dateFmt(t1, { day: 'numeric', month: 'short' })}</text>
       <g class="cross" style="display:none"><line y1="0" y2="${h - padB}"/><circle r="4.5"/></g>
     </svg>`;
 }
@@ -433,10 +463,12 @@ function paintChart() {
 
   const w = Math.max(260, Math.round(box.clientWidth || 340));
   const h = 180;
-  box.innerHTML = chartSVG(pts, w, h, trend);
+  const band = last.live ? weekBand(k) : null;
+  const cone = band ? band.path.map((p) => ({ t: p.at, lo: last.v * p.low, hi: last.v * p.high })) : null;
+  box.innerHTML = chartSVG(pts, w, h, trend, cone);
   const svg = box.querySelector('svg');
   const cross = svg.querySelector('.cross');
-  const { x: X, y: Y } = chartGeom(pts, w, h);
+  const { x: X, y: Y } = chartGeom(pts, w, h, cone);
   // Scrubbing shows the value in the header line, like the Stocks app.
   const move = (ev) => {
     const rect = svg.getBoundingClientRect();
@@ -558,6 +590,8 @@ function renderPrices() {
       <div class="chart" id="chart" dir="ltr"></div>
       ${seg('range', RANGES.map((r) => [r.days, r.label]), S.range, 'small')}
     </section>
+    <div id="px-week"></div>
+    <div id="px-events"></div>
     ${group('<div id="px-list"></div>', { head: 'سعر الغرام لكل عيار' })}
     ${group('<div id="px-units"></div>', { head: 'وحدات أخرى' })}
     ${group('<div id="px-meta"></div>', { head: 'المصدر', foot: manual ? '' : 'لو كان سعر المحل اللي تتعامل معه مختلف، اكتب السعر اللي تشوفه مرة وحدة والتطبيق يتطابق معه ويتابع السوق.' })}`;
@@ -630,6 +664,55 @@ function paintPricesLive(dir) {
   ].join('');
   paintStatus();
   paintChart();
+  paintWeek();
+  paintEvents();
+}
+
+function paintWeek() {
+  const box = document.getElementById('px-week');
+  if (!box) return;
+  const k = S.heroK || defK();
+  const b = weekBand(k);
+  const head = `<span>الأسبوع الجاي، عيار ${num(k)}</span>`;
+  if (!b) {
+    box.innerHTML = group(row(histLoading ? 'جارٍ تجهيز المدى المتوقع' : 'لا تتوفر بيانات كافية بعد', ''), { head });
+    return;
+  }
+  const evNote = b.events ? ` المدى أوسع من المعتاد لأن فيه ${b.events === 1 ? 'حدث مهم' : b.events === 2 ? 'حدثين مهمين' : `${num(b.events)} أحداث مهمة`} خلال الأسبوع.` : '';
+  box.innerHTML = group(
+    row('الحد الأعلى', money(b.highP), { sub: num(`+${fmtPct(b.high - 1, 1)}`) })
+    + row('السعر الآن', money(b.now))
+    + row('الحد الأدنى', money(b.lowP), { sub: num(`-${fmtPct(1 - b.low, 1)}`) }),
+    { head, foot: `غالبًا يكون السعر بعد 7 أيام بين هذين الحدين. جربنا الطريقة على آخر سنتين ونص وبقي السعر داخل المدى في ${num(fmtPct(MODEL.coverage, 0))} من المرات. المدى يقيس حجم الحركة المعتادة، وما يتوقع إذا السعر بيطلع أو ينزل.${evNote}` },
+  );
+}
+
+function paintEvents() {
+  const box = document.getElementById('px-events');
+  if (!box) return;
+  const now = Date.now();
+  const soon = EVENTS.filter((e) => e.at > now - 3 * 3600e3 && e.at <= now + 7 * 864e5);
+  const list = soon.length ? soon : EVENTS.filter((e) => e.at > now).slice(0, 2);
+  const startOf = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+  const when = (t) => {
+    const d = Math.round((startOf(t) - startOf(now)) / 864e5);
+    if (d <= 0) return t < now ? 'صدر اليوم' : 'اليوم';
+    if (d === 1) return 'بكرة';
+    if (d === 2) return 'بعد يومين';
+    return d <= 10 ? `بعد ${num(d)} أيام` : `بعد ${num(d)} يوم`;
+  };
+  const stale = now > Date.parse(`${EVENTS_UNTIL}T00:00:00Z`) - 30 * 864e5;
+  box.innerHTML = list.length || stale ? group(
+    list.map((e) => row(KINDS[e.kind].title, `<span class="muted">${when(e.at)}</span>`, {
+      sub: `${KINDS[e.kind].sub}، ${dateFmt(e.at, { weekday: 'long', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' })}`,
+    })).join(''),
+    {
+      head: soon.length ? 'أحداث تحرك الذهب هالأسبوع' : 'الأحداث الجاية اللي تحرك الذهب',
+      foot: stale
+        ? 'قائمة المواعيد تحتاج تحديث.'
+        : `${soon.length ? '' : 'ما فيه أحداث كبيرة هالأسبوع. '}مواعيد رسمية من الاحتياطي الفيدرالي ومكتب إحصاءات العمل الأمريكي، بتوقيت جهازك، وقد تتغير.`,
+    },
+  ) : '';
 }
 
 /* ======================================================================
