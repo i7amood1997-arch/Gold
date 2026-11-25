@@ -323,6 +323,16 @@ a { color: inherit; text-decoration: none; }
 
 /* ============================================================ vault */
 
+.stats { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 20px; }
+.stat { background: var(--cell); border-radius: var(--radius); padding: 12px 14px; min-width: 0; }
+.stat-label { font-size: 13px; color: var(--label-2); }
+.stat-value { font-size: 20px; font-weight: 600; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.stat-value .cur { font-size: 13px; }
+.stat-caption { font-size: 12px; color: var(--label-2); margin-top: 2px; }
+.stat-caption.up { color: var(--green); }
+.skeleton.small { width: 90px; height: 0.9em; }
+.row.link .row-value span { white-space: nowrap; }
+
 .empty { text-align: center; padding: 64px 24px 24px; display: grid; justify-items: center; gap: 10px; color: var(--label-2); }
 .empty .ic { color: var(--label-3); margin-bottom: 6px; }
 .empty h2 { color: var(--label); font-size: 20px; font-weight: 600; }

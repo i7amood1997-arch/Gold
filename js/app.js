@@ -9,7 +9,7 @@ import { weekRange, HISTORY_DAYS, MODEL } from './forecast.js';
 import { EVENTS, KINDS, EVENTS_UNTIL } from './events.js';
 import { purchaseCost, portfolio, cheaperThan, targetStatus } from './invest.js';
 
-export const BUILD = '2026.11.25-2';
+export const BUILD = '2026.11.25-3';
 
 /* ======================================================================
    State
@@ -358,6 +358,7 @@ async function ensureHistory() {
       } else histMiss.add(batch[j]);
     });
     if (i % 48 === 0) { paintChart(); paintWeek(); }
+    if (S.tab === 'vault' && S.vaultMode === 'invest' && i % 48 === 0) paintInvest();
   }
   // Keep the cache bounded to ~400 days.
   const keys = Object.keys(S.hist).sort();
@@ -366,6 +367,7 @@ async function ensureHistory() {
   histLoading = false;
   paintChart();
   paintWeek();
+  if (S.tab === 'vault' && S.vaultMode === 'invest') paintInvest();
 }
 
 // Weekly range for the shown karat, as prices; null until enough history.
@@ -1180,7 +1182,7 @@ function renderVault() {
   if (S.vaultMode === 'invest') return renderInvest();
   view.innerHTML = `
     ${navBar('مجوهراتي')}
-    ${seg('vm', [['jewel', 'مجوهراتي'], ['invest', 'استثماراتي']], S.vaultMode)}
+    ${seg('vm', VAULT_MODES, S.vaultMode)}
     <section id="vault-sum"></section>
     ${S.entries.length ? seg('vf', [['all', 'الكل'], ['owned', 'أملكها'], ['sell', 'بيع']], S.vaultFilter) : ''}
     <section id="vault-list"></section>`;
@@ -1318,20 +1320,16 @@ function openEntry(id) {
    ====================================================================== */
 
 const persistInvest = () => save('invest', S.invest);
+const VAULT_MODES = [['jewel', 'المجوهرات'], ['invest', 'الاستثمار']];
 const investRows = () => S.invest.holdings.filter((h) => h.currency === S.settings.currency);
 
 function renderInvest() {
   view.innerHTML = `
     ${navBar('مجوهراتي', S.invest.holdings.length ? `<button type="button" class="bar-icon" data-action="inv-add" aria-label="إضافة شرية">${icon('plus', 24)}</button>` : '')}
-    ${seg('vm', [['jewel', 'مجوهراتي'], ['invest', 'استثماراتي']], S.vaultMode)}
-    <div id="inv-body"></div>
-    ${S.invest.holdings.length ? group(
-      inputRow('خصم المحل عند البيع', `data-inv-discount value="${S.invest.discountPct ? +S.invest.discountPct.toFixed(2) : ''}"`, pctSign(), { placeholder: '0' })
-      + actionRow('طابق مع سعر البيع في البنك أو المحل', 'data-action="inv-sellcal"', { ic: 'edit' }),
-      { head: 'البيع', foot: 'البنك أو المحل لما يشتري منك ذهب يدفع أقل من سعر البيع للزبائن. اكتب السعر اللي يعطيك إياه، والتطبيق يحسب الفرق ويطلع لك قيمة البيع الحقيقية.' },
-    ) : ''}`;
+    ${seg('vm', VAULT_MODES, S.vaultMode)}
+    <div id="inv-body"></div>`;
   paintInvest();
-  ensureHistory(); // the "cheaper than" line needs recent daily prices
+  ensureHistory(); // the 3-month comparison needs recent daily prices
   view.onclick = (e) => {
     const b = e.target.closest('button');
     if (!b) return;
@@ -1341,19 +1339,12 @@ function renderInvest() {
     else if (b.dataset.action === 'inv-target') openTarget();
     else if (b.dataset.action === 'inv-sellcal') openSellCalib();
   };
-  view.oninput = (e) => {
-    if (e.target.dataset.invDiscount === undefined) return;
-    const v = parseNum(e.target.value);
-    S.invest.discountPct = Number.isFinite(v) ? Math.min(Math.max(v, 0), 50) : 0;
-    persistInvest();
-    paintInvest();
-  };
+  view.oninput = null;
 }
 
 function paintInvest() {
   const box = document.getElementById('inv-body');
   if (!box) return;
-  const rows = investRows();
   if (!S.invest.holdings.length) {
     box.innerHTML = `
       <div class="empty">
@@ -1364,74 +1355,77 @@ function paintInvest() {
       </div>`;
     return;
   }
+  const rows = investRows();
   const P = p24();
   const c = cur();
   const d = S.invest.discountPct || 0;
+  const keep = 1 - d / 100;
   const pf = portfolio({ holdings: rows, p24: P, ratios: ratios(), discountPct: d });
-  const sign = (x) => `<span class="${x >= 0 ? 'up' : 'down'}">${num(signed(x, c.dec))}</span>`;
+  const signedMoney = (x) => `<span class="${x >= 0 ? 'up' : 'down'}">${num(signed(x, c.dec))}</span>`;
   const pct = (x) => num(`${x >= 0 ? '+' : '-'}${fmtPct(Math.abs(x), 1)}`);
 
-  // Break-even: in the karat they hold if it's one karat, else in 24K.
+  // Quote everything per gram in the karat they hold (24K when mixed).
   const ks = [...new Set(rows.map((h) => h.k))];
-  const beK = ks.length === 1 ? ks[0] : 24;
-  const be = ks.length === 1 ? pf.breakEven24 * (ratios()[beK] ?? beK / 24) : pf.breakEven24;
-  const nowK = P ? kp(P, beK) : NaN;
-  const beGap = (be - nowK) / nowK;
+  const qk = ks.length === 1 ? ks[0] : 24;
+  const ratio = ratios()[qk] ?? qk / 24;
+  const be = pf.breakEven24 * ratio;
+  const sellNow = P ? kp(P, qk) * keep : NaN;
+  const beGap = (be - sellNow) / sellNow;
+  const weight = rows.reduce((s, h) => s + h.w, 0);
 
-  // Where today's price sits in the last 90 days.
   const past = rangeDates(90, 1).filter((dd) => S.hist[dd]).map((dd) => dayP24(S.hist[dd]));
   const cheaper = P ? cheaperThan(past, marketP24()) : null;
+  const pos = cheaper == null ? null
+    : cheaper >= 0.995 ? ['الأرخص', 'في آخر 3 شهور']
+    : cheaper <= 0.005 ? ['الأغلى', 'في آخر 3 شهور']
+    : cheaper >= 0.5 ? [`أرخص من ${num(fmtPct(cheaper, 0))}`, 'من أيام آخر 3 شهور']
+    : [`أغلى من ${num(fmtPct(1 - cheaper, 0))}`, 'من أيام آخر 3 شهور'];
 
   const t = S.invest.target;
   const tNow = t && P ? kp(P, t.k) : NaN;
   const ts = t ? targetStatus(t, tNow) : null;
-
-  const listHTML = rows.map((h) => {
-    const r = pf.rows.find((x) => x.id === h.id);
-    return `
-      <button type="button" class="row entry" data-inv="${h.id}">
-        <span class="row-label"><span>${esc(h.note || `ذهب عيار ${h.k}`)}</span><small>${num(fmtW(h.w))} غ عيار ${num(h.k)}، ${dateFmt(h.date, { day: 'numeric', month: 'short', year: 'numeric' })}، دفعت ${num(fmt(h.total, c.dec))}</small></span>
-        <span class="row-value"><span>${Number.isFinite(r.pl) ? sign(r.pl) : '-'}</span><small>${Number.isFinite(r.plPct) ? pct(r.plPct) : ''}</small></span>
-        ${icon('chevron', 16)}
-      </button>`;
-  }).join('');
   const other = S.invest.holdings.length - rows.length;
 
+  const stat = (label, value, caption = '', cls = '') => `
+    <div class="stat">
+      <p class="stat-label">${label}</p>
+      <p class="stat-value">${value}</p>
+      ${caption ? `<p class="stat-caption ${cls}">${caption}</p>` : ''}
+    </div>`;
+
   box.innerHTML = `
-    <div class="quote">
-      <p class="quote-label">${d ? 'قيمتها لو بعت الحين' : 'قيمتها بسعر السوق الحين'}</p>
+    <section class="quote">
+      <p class="quote-label">${d ? 'قيمتها لو بعت الحين' : 'قيمتها بسعر السوق'}</p>
       <p class="quote-price">${P ? `${num(fmt(pf.sell, c.dec))}<span class="cur">${c.sym}</span>` : '<span class="skeleton"></span>'}</p>
-      ${P ? `<p class="quote-change">${sign(pf.pl)} <span class="pill ${pf.pl >= 0 ? 'up' : 'down'}">${pct(pf.plPct)}</span> <span class="muted">${pf.pl >= 0 ? 'ربح' : 'خسارة'}</span></p>` : ''}
-    </div>
+      ${P ? `<p class="quote-change">${signedMoney(pf.pl)} <span class="pill ${pf.pl >= 0 ? 'up' : 'down'}">${pct(pf.plPct)}</span> <span class="muted">${pf.pl >= 0 ? 'ربح' : 'خسارة'}</span></p>` : ''}
+      <p class="status">${num(fmtW(weight))} غ${ks.length === 1 ? ` عيار ${num(qk)}` : ''} في ${rows.length === 1 ? 'شرية وحدة' : rows.length === 2 ? 'شريتين' : `${num(rows.length)} ${rows.length < 11 ? 'شريات' : 'شرية'}`}</p>
+    </section>
+
+    ${P ? `<section class="stats">
+      ${stat('دفعت', money(pf.cost))}
+      ${stat('سعر التعادل', money(be), beGap > 0 ? `لازم يطلع ${num(fmtPct(beGap, 1))}` : `أعلى منه بـ ${num(fmtPct(-beGap, 1))}`, beGap > 0 ? '' : 'up')}
+      ${stat(`سعر البيع لعيار ${num(qk)}`, money(sellNow), d ? `بعد خصم ${num(fmt(d, 2) + pctSign())}` : 'بدون خصم البيع')}
+      ${stat('مقارنة بآخر 3 شهور', pos ? pos[0] : histLoading ? '<span class="skeleton small"></span>' : '-', pos ? pos[1].replace(' في آخر 3 شهور', ' سعر').replace('من أيام آخر 3 شهور', 'من الأيام') : histLoading ? 'جارٍ التحميل' : 'ما فيه بيانات كافية')}
+    </section>` : ''}
+
+    ${group(rows.map((h) => {
+      const r = pf.rows.find((x) => x.id === h.id);
+      return `
+        <button type="button" class="row entry" data-inv="${h.id}">
+          <span class="row-label"><span>${esc(h.note || `ذهب عيار ${h.k}`)}</span><small>${num(fmtW(h.w))} غ عيار ${num(h.k)}، ${dateFmt(h.date, { day: 'numeric', month: 'short', year: 'numeric' })}</small></span>
+          <span class="row-value"><span>${Number.isFinite(r.sell) ? money(r.sell) : '-'}</span><small>${Number.isFinite(r.pl) ? `${signedMoney(r.pl)}&nbsp;&nbsp;${pct(r.plPct)}` : ''}</small></span>
+          ${icon('chevron', 16)}
+        </button>`;
+    }).join(''), { head: 'المشتريات', foot: other ? `${num(other)} مشتريات بعملة ثانية ما تنحسب هنا.` : '' })}
+
     ${group(
-      row('دفعت', money(pf.cost))
-      + row('قيمتها بسعر السوق', money(pf.market))
-      + (d ? row('لو بعتها الحين', money(pf.sell), { sub: `بعد خصم البيع ${num(fmt(d, 2) + pctSign())}` }) : '')
-      + row(pf.pl >= 0 ? 'الربح' : 'الخسارة', `${sign(pf.pl)} <span class="cur">${c.sym}</span>`, { cls: 'total' }),
+      linkRow('هدف السعر', t
+        ? `<span class="${ts?.reached ? 'up' : ''}">${t.side === 'buy' ? 'شراء' : 'بيع'} عند ${num(fmt(t.price, c.dec))}، ${ts ? (ts.reached ? 'وصل' : `باقي ${num(fmtPct(Math.abs(ts.gapPct), 1))}`) : ''}</span>`
+        : 'غير محدد', 'data-action="inv-target"')
+      + linkRow('خصم البيع', d ? num(`${fmt(d, 2)}${pctSign()}`) : 'بدون', 'data-action="inv-sellcal"'),
     )}
-    ${P ? group(
-      row(`سعر غرام عيار ${num(beK)} للتعادل`, money(be), {
-        sub: beGap > 0 ? `السعر الحين ${num(fmt(nowK, c.dec))}، لازم يطلع ${num(fmtPct(beGap, 1))}` : `السعر الحين ${num(fmt(nowK, c.dec))}، أعلى منه بـ ${num(fmtPct(-beGap, 1))}`,
-      })
-      + (cheaper != null ? row('مقارنة بآخر 3 شهور', '', {
-        sub: cheaper >= 0.995 ? 'السعر الحين أرخص سعر في آخر 3 شهور' : cheaper <= 0.005 ? 'السعر الحين أغلى سعر في آخر 3 شهور' : cheaper >= 0.5 ? `السعر الحين أرخص من ${num(fmtPct(cheaper, 0))} من الأيام` : `السعر الحين أغلى من ${num(fmtPct(1 - cheaper, 0))} من الأيام`,
-      }) : ''),
-      { head: 'وين واقف', foot: 'سعر التعادل هو السعر اللي لو بعت عنده ترجع لك فلوسك بالضبط. هذي معلومات تساعدك تقرر، وما فيها توقع إذا السعر بيطلع أو ينزل.' },
-    ) : ''}
-    ${group(
-      t
-        ? `<button type="button" class="row entry" data-action="inv-target">
-            <span class="row-label"><span>${t.side === 'buy' ? 'أشتري' : 'أبيع'} لما يوصل عيار ${num(t.k)} إلى ${num(fmt(t.price, c.dec))}</span><small>${Number.isFinite(tNow) ? `السعر الحين ${num(fmt(tNow, c.dec))}` : ''}</small></span>
-            <span class="row-value"><span class="${ts?.reached ? 'up' : 'muted'}">${ts ? (ts.reached ? 'وصل' : `باقي ${num(fmtPct(Math.abs(ts.gapPct), 1))}`) : '-'}</span></span>
-            ${icon('chevron', 16)}
-          </button>`
-        : actionRow('حدد هدف سعر', 'data-action="inv-target"', { ic: 'edit' }),
-      { head: 'الهدف' },
-    )}
-    ${group(listHTML + actionRow('إضافة شرية', 'data-action="inv-add"', { ic: 'plus' }), {
-      head: 'مشترياتي',
-      foot: other ? `${num(other)} مشتريات بعملة ثانية ما تنحسب هنا.` : '',
-    })}`;
+
+    <p class="about">سعر التعادل هو السعر اللي لو بعت عنده ترجع لك فلوسك. الأرقام معلومات تساعدك تقرر، مو نصيحة بيع أو شراء.</p>`;
 }
 
 function openPurchase(existing) {
@@ -1499,43 +1493,59 @@ function openPurchase(existing) {
   });
 }
 
-// The user types the buy-back rate their bank or shop shows; the gap to the
-// app's price becomes the sell discount, so values match what they'd receive.
+// Sell discount: how far below the app's price a bank or shop buys gold back.
+// Set it by typing the buy-back gram price they quote, or the % directly.
 function openSellCalib() {
   const c = cur();
   const P = p24();
   if (!P) return toast('انتظر حتى يصل السعر أولًا');
   let k = investRows()[0]?.k ?? 24;
+  const had = S.invest.discountPct || 0;
   openSheet({
-    title: 'سعر البيع',
+    title: 'خصم البيع',
     done: 'حفظ',
     body: `
-      <p class="sheet-intro">اكتب سعر الغرام اللي يعطيك إياه البنك أو المحل لما تبيع له، مثل «Exchange Rate» في تطبيق البنك.</p>
+      <p class="sheet-intro">البنك أو المحل لما يشتري منك ذهب يدفع أقل من سعر البيع للزبائن. اكتب سعر الغرام اللي يعطيك إياه، مثل «Exchange Rate» في تطبيق البنك.</p>
       ${group(`
         ${stackRow('العيار', karatSeg('sk', k))}
-        ${inputRow('سعر البيع للغرام', 'data-s="v"', c.sym, { placeholder: '0.000' })}
+        ${inputRow('سعر البيع للغرام', 'data-s="v"', c.sym, { placeholder: fmt(kp(P, k) * (1 - had / 100), c.dec) })}
+        ${row(`<span data-s="ref"></span>`, '<span data-s="refv"></span>')}
       `)}
-      ${group('<div data-s="out"></div>', { foot: 'السعر يتغير مع السوق، والفرق بالنسبة غالبًا يبقى قريب. لو تغير هامش البنك، طابقه مرة ثانية.' })}`,
+      ${group(inputRow('أو اكتب النسبة', `data-s="pct" value="${had ? +had.toFixed(2) : ''}"`, pctSign(), { placeholder: '0' }),
+        { foot: 'السعر يتغير مع السوق، والفرق بالنسبة غالبًا يبقى قريب. لو تغير هامش البنك، طابقه مرة ثانية.' })}
+      ${had ? group(actionRow('بدون خصم', 'data-s="clear"', { ic: 'trash', cls: 'destructive' })) : ''}`,
   }, (sheet) => {
-    const input = sheet.querySelector('[data-s="v"]');
-    const out = sheet.querySelector('[data-s="out"]');
-    const pct = () => { const v = parseNum(input.value); return v > 0 ? (1 - v / kp(P, k)) * 100 : NaN; };
-    const paint = () => {
-      const d = pct();
-      out.innerHTML = row(`سعر عيار ${num(k)} في التطبيق`, money(kp(P, k)))
-        + row('خصم البيع', Number.isFinite(d) ? num(`${fmt(d, 2)}${pctSign()}`) : '-', { cls: Number.isFinite(d) && (d < 0 || d > 15) ? 'bad' : '' });
+    const priceIn = sheet.querySelector('[data-s="v"]');
+    const pctIn = sheet.querySelector('[data-s="pct"]');
+    const base = () => kp(P, k);
+    const paintRef = () => {
+      sheet.querySelector('[data-s="ref"]').innerHTML = `سعر عيار ${num(k)} في التطبيق`;
+      sheet.querySelector('[data-s="refv"]').innerHTML = money(base());
     };
-    paint();
-    input.focus({ preventScroll: true });
-    input.oninput = paint;
+    paintRef();
+    priceIn.focus({ preventScroll: true });
+    // Typing a price fills the %, typing a % fills the price.
+    let typed = 'price';
+    priceIn.oninput = () => {
+      typed = 'price';
+      const v = parseNum(priceIn.value);
+      pctIn.value = v > 0 ? String(+((1 - v / base()) * 100).toFixed(2)) : '';
+    };
+    pctIn.oninput = (e) => {
+      if (e) typed = 'pct';
+      const v = parseNum(pctIn.value);
+      priceIn.value = Number.isFinite(v) ? String(+(base() * (1 - v / 100)).toFixed(3)) : '';
+    };
     sheet.onclick = (ev) => {
       const b = ev.target.closest('button');
       if (!b) return;
-      if (b.dataset.sk) { k = Number(b.dataset.sk); selectSeg(b); paint(); }
+      if (b.dataset.sk) { k = Number(b.dataset.sk); selectSeg(b); paintRef(); pctIn.oninput(); }
+      else if (b.dataset.s === 'clear') { S.invest.discountPct = 0; persistInvest(); closeSheet(); renderInvest(); }
       else if (b.dataset.done !== undefined) {
-        const d = pct();
-        if (!Number.isFinite(d)) return toast('اكتب السعر');
-        if (d < 0 || d > 15) return toast('السعر بعيد عن سعر السوق، تأكد من العيار');
+        const v = parseNum(priceIn.value);
+        const d = typed === 'pct' || !(v > 0) ? parseNum(pctIn.value) : (1 - v / base()) * 100;
+        if (!Number.isFinite(d)) return toast('اكتب السعر أو النسبة');
+        if (d < 0 || d > 15) return toast('الرقم بعيد عن سعر السوق، تأكد من العيار');
         S.invest.discountPct = Math.round(d * 10000) / 10000;
         persistInvest(); closeSheet(); toast(`تم، خصم البيع ${fmt(d, 2)}%`); renderInvest();
       }
