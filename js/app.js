@@ -9,7 +9,7 @@ import { weekRange, HISTORY_DAYS, MODEL } from './forecast.js';
 import { EVENTS, KINDS, EVENTS_UNTIL } from './events.js';
 import { purchaseCost, portfolio, cheaperThan, targetStatus } from './invest.js';
 
-export const BUILD = '2026.11.25-3';
+export const BUILD = '2026.11.25-4';
 
 /* ======================================================================
    State
@@ -1403,8 +1403,8 @@ function paintInvest() {
 
     ${P ? `<section class="stats">
       ${stat('دفعت', money(pf.cost))}
-      ${stat('سعر التعادل', money(be), beGap > 0 ? `لازم يطلع ${num(fmtPct(beGap, 1))}` : `أعلى منه بـ ${num(fmtPct(-beGap, 1))}`, beGap > 0 ? '' : 'up')}
-      ${stat(`سعر البيع لعيار ${num(qk)}`, money(sellNow), d ? `بعد خصم ${num(fmt(d, 2) + pctSign())}` : 'بدون خصم البيع')}
+      ${stat('قيمتها بسعر السوق', money(pf.market), d ? `لو بعتها: ${num(fmt(pf.sell, c.dec))} بعد خصم ${num(fmt(d, 2) + pctSign())}` : '')}
+      ${stat(`سعر التعادل لعيار ${num(qk)}`, money(be), `البيع الحين ${num(fmt(sellNow, c.dec))}، ${beGap > 0 ? `لازم يطلع ${num(fmtPct(beGap, 1))}` : `أعلى منه بـ ${num(fmtPct(-beGap, 1))}`}`, beGap > 0 ? '' : 'up')}
       ${stat('مقارنة بآخر 3 شهور', pos ? pos[0] : histLoading ? '<span class="skeleton small"></span>' : '-', pos ? pos[1].replace(' في آخر 3 شهور', ' سعر').replace('من أيام آخر 3 شهور', 'من الأيام') : histLoading ? 'جارٍ التحميل' : 'ما فيه بيانات كافية')}
     </section>` : ''}
 
@@ -1412,16 +1412,20 @@ function paintInvest() {
       const r = pf.rows.find((x) => x.id === h.id);
       return `
         <button type="button" class="row entry" data-inv="${h.id}">
-          <span class="row-label"><span>${esc(h.note || `ذهب عيار ${h.k}`)}</span><small>${num(fmtW(h.w))} غ عيار ${num(h.k)}، ${dateFmt(h.date, { day: 'numeric', month: 'short', year: 'numeric' })}</small></span>
-          <span class="row-value"><span>${Number.isFinite(r.sell) ? money(r.sell) : '-'}</span><small>${Number.isFinite(r.pl) ? `${signedMoney(r.pl)}&nbsp;&nbsp;${pct(r.plPct)}` : ''}</small></span>
+          <span class="row-label"><span>${esc(h.note || `ذهب عيار ${h.k}`)}</span><small>${num(fmtW(h.w))} غ عيار ${num(h.k)}، ${dateFmt(h.date, { day: 'numeric', month: 'long', year: 'numeric' })}، دفعت ${num(fmt(h.total, c.dec))}</small></span>
+          <span class="row-value"><span>${Number.isFinite(r.pl) ? signedMoney(r.pl) : '-'}</span><small>${Number.isFinite(r.plPct) ? pct(r.plPct) : ''}</small></span>
           ${icon('chevron', 16)}
         </button>`;
     }).join(''), { head: 'المشتريات', foot: other ? `${num(other)} مشتريات بعملة ثانية ما تنحسب هنا.` : '' })}
 
     ${group(
-      linkRow('هدف السعر', t
-        ? `<span class="${ts?.reached ? 'up' : ''}">${t.side === 'buy' ? 'شراء' : 'بيع'} عند ${num(fmt(t.price, c.dec))}، ${ts ? (ts.reached ? 'وصل' : `باقي ${num(fmtPct(Math.abs(ts.gapPct), 1))}`) : ''}</span>`
-        : 'غير محدد', 'data-action="inv-target"')
+      (t
+        ? `<button type="button" class="row entry" data-action="inv-target">
+            <span class="row-label"><span>${t.side === 'buy' ? 'أشتري' : 'أبيع'} لما يوصل عيار ${num(t.k)} إلى ${num(fmt(t.price, c.dec))}</span><small>${Number.isFinite(tNow) ? `السعر الحين ${num(fmt(tNow, c.dec))}` : ''}</small></span>
+            <span class="row-value"><span class="${ts?.reached ? 'up' : 'muted'}">${ts ? (ts.reached ? 'وصل' : `باقي ${num(fmtPct(Math.abs(ts.gapPct), 1))}`) : '-'}</span></span>
+            ${icon('chevron', 16)}
+          </button>`
+        : linkRow('هدف السعر', 'غير محدد', 'data-action="inv-target"'))
       + linkRow('خصم البيع', d ? num(`${fmt(d, 2)}${pctSign()}`) : 'بدون', 'data-action="inv-sellcal"'),
     )}
 
