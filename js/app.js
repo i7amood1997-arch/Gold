@@ -7,8 +7,9 @@ import { load, save, DEFAULT_SETTINGS, uid } from './store.js';
 import { ICONS } from './icons.js';
 import { weekRange, HISTORY_DAYS, MODEL } from './forecast.js';
 import { EVENTS, KINDS, EVENTS_UNTIL } from './events.js';
+import { purchaseCost, portfolio, cheaperThan, targetStatus } from './invest.js';
 
-export const BUILD = '2026.11.19-1';
+export const BUILD = '2026.11.25-1';
 
 /* ======================================================================
    State
@@ -38,6 +39,8 @@ const S = {
   offline: false,
   tab: 'prices',
   vaultFilter: 'all',
+  vaultMode: load('vaultMode', 'jewel'),
+  invest: { holdings: [], discountPct: 0, target: null, ...load('invest', {}) },
 };
 
 // Settings saved before pricing profiles existed: switch to the Delmon
@@ -306,7 +309,7 @@ function onPrice(prevUsd) {
     if (S.price?.daily) ensureHistory();
   }
   if (S.tab === 'calc') paintCalcResult();
-  if (S.tab === 'vault') paintVault();
+  if (S.tab === 'vault') (S.vaultMode === 'invest' ? paintInvest() : paintVault());
   if (S.tab === 'tools') { paintZakat(); paintConv(); }
 }
 
@@ -1174,8 +1177,10 @@ function holdings() {
 }
 
 function renderVault() {
+  if (S.vaultMode === 'invest') return renderInvest();
   view.innerHTML = `
     ${navBar('مجوهراتي')}
+    ${seg('vm', [['jewel', 'مجوهراتي'], ['invest', 'استثماراتي']], S.vaultMode)}
     <section id="vault-sum"></section>
     ${S.entries.length ? seg('vf', [['all', 'الكل'], ['owned', 'أملكها'], ['sell', 'بيع']], S.vaultFilter) : ''}
     <section id="vault-list"></section>`;
@@ -1183,7 +1188,8 @@ function renderVault() {
   view.onclick = (e) => {
     const b = e.target.closest('button');
     if (!b) return;
-    if (b.dataset.vf) { S.vaultFilter = b.dataset.vf; selectSeg(b); paintVault(); }
+    if (b.dataset.vm) { S.vaultMode = b.dataset.vm; save('vaultMode', S.vaultMode); renderVault(); }
+    else if (b.dataset.vf) { S.vaultFilter = b.dataset.vf; selectSeg(b); paintVault(); }
     else if (b.dataset.entry) openEntry(b.dataset.entry);
     else if (b.dataset.action === 'to-calc') location.hash = '#calc';
   };
@@ -1302,6 +1308,224 @@ function openEntry(id) {
         closeSheet();
         toast('تم الحذف');
         renderVault();
+      }
+    };
+  });
+}
+
+/* ======================================================================
+   Investments: gold bought to hold, valued at today's price
+   ====================================================================== */
+
+const persistInvest = () => save('invest', S.invest);
+const investRows = () => S.invest.holdings.filter((h) => h.currency === S.settings.currency);
+
+function renderInvest() {
+  view.innerHTML = `
+    ${navBar('مجوهراتي', S.invest.holdings.length ? `<button type="button" class="bar-icon" data-action="inv-add" aria-label="إضافة شرية">${icon('plus', 24)}</button>` : '')}
+    ${seg('vm', [['jewel', 'مجوهراتي'], ['invest', 'استثماراتي']], S.vaultMode)}
+    <div id="inv-body"></div>
+    ${S.invest.holdings.length ? group(
+      inputRow('خصم المحل عند البيع', `data-inv-discount value="${S.invest.discountPct || ''}"`, pctSign(), { placeholder: '0' }),
+      { head: 'البيع', foot: 'المحل لما يشتري منك ذهب ياخذه غالبًا بأقل من سعر السوق. اكتب الفرق هنا عشان يطلع لك الربح الحقيقي.' },
+    ) : ''}`;
+  paintInvest();
+  ensureHistory(); // the "cheaper than" line needs recent daily prices
+  view.onclick = (e) => {
+    const b = e.target.closest('button');
+    if (!b) return;
+    if (b.dataset.vm) { S.vaultMode = b.dataset.vm; save('vaultMode', S.vaultMode); renderVault(); }
+    else if (b.dataset.action === 'inv-add') openPurchase();
+    else if (b.dataset.inv) openPurchase(S.invest.holdings.find((h) => h.id === b.dataset.inv));
+    else if (b.dataset.action === 'inv-target') openTarget();
+  };
+  view.oninput = (e) => {
+    if (e.target.dataset.invDiscount === undefined) return;
+    const v = parseNum(e.target.value);
+    S.invest.discountPct = Number.isFinite(v) ? Math.min(Math.max(v, 0), 50) : 0;
+    persistInvest();
+    paintInvest();
+  };
+}
+
+function paintInvest() {
+  const box = document.getElementById('inv-body');
+  if (!box) return;
+  const rows = investRows();
+  if (!S.invest.holdings.length) {
+    box.innerHTML = `
+      <div class="empty">
+        ${icon('prices', 44)}
+        <h2>تابع ذهبك الاستثماري</h2>
+        <p>سجّل الذهب اللي اشتريته، بالمبلغ الكلي أو بسعر الغرام، وشوف ربحك أو خسارتك بسعر اليوم.</p>
+        <button type="button" class="btn filled" data-action="inv-add">إضافة شرية</button>
+      </div>`;
+    return;
+  }
+  const P = p24();
+  const c = cur();
+  const d = S.invest.discountPct || 0;
+  const pf = portfolio({ holdings: rows, p24: P, ratios: ratios(), discountPct: d });
+  const sign = (x) => `<span class="${x >= 0 ? 'up' : 'down'}">${num(signed(x, c.dec))}</span>`;
+  const pct = (x) => num(`${x >= 0 ? '+' : '-'}${fmtPct(Math.abs(x), 1)}`);
+
+  // Break-even: in the karat they hold if it's one karat, else in 24K.
+  const ks = [...new Set(rows.map((h) => h.k))];
+  const beK = ks.length === 1 ? ks[0] : 24;
+  const be = ks.length === 1 ? pf.breakEven24 * (ratios()[beK] ?? beK / 24) : pf.breakEven24;
+  const nowK = P ? kp(P, beK) : NaN;
+  const beGap = (be - nowK) / nowK;
+
+  // Where today's price sits in the last 90 days.
+  const past = rangeDates(90, 1).filter((dd) => S.hist[dd]).map((dd) => dayP24(S.hist[dd]));
+  const cheaper = P ? cheaperThan(past, marketP24()) : null;
+
+  const t = S.invest.target;
+  const tNow = t && P ? kp(P, t.k) : NaN;
+  const ts = t ? targetStatus(t, tNow) : null;
+
+  const listHTML = rows.map((h) => {
+    const r = pf.rows.find((x) => x.id === h.id);
+    return `
+      <button type="button" class="row entry" data-inv="${h.id}">
+        <span class="row-label"><span>${esc(h.note || `ذهب عيار ${h.k}`)}</span><small>${num(fmtW(h.w))} غ عيار ${num(h.k)}، ${dateFmt(h.date, { day: 'numeric', month: 'short', year: 'numeric' })}، دفعت ${num(fmt(h.total, c.dec))}</small></span>
+        <span class="row-value"><span>${Number.isFinite(r.pl) ? sign(r.pl) : '-'}</span><small>${Number.isFinite(r.plPct) ? pct(r.plPct) : ''}</small></span>
+        ${icon('chevron', 16)}
+      </button>`;
+  }).join('');
+  const other = S.invest.holdings.length - rows.length;
+
+  box.innerHTML = `
+    <div class="quote">
+      <p class="quote-label">${d ? `قيمتها لو بعت الحين، بعد خصم المحل ${num(fmt(d, 1) + pctSign())}` : 'قيمتها بسعر السوق الحين'}</p>
+      <p class="quote-price">${P ? `${num(fmt(pf.sell, c.dec))}<span class="cur">${c.sym}</span>` : '<span class="skeleton"></span>'}</p>
+      ${P ? `<p class="quote-change">${sign(pf.pl)} <span class="pill ${pf.pl >= 0 ? 'up' : 'down'}">${pct(pf.plPct)}</span> <span class="muted">${pf.pl >= 0 ? 'ربح' : 'خسارة'}</span></p>` : ''}
+    </div>
+    ${group(
+      row('دفعت', money(pf.cost))
+      + row('قيمتها بسعر السوق', money(pf.market))
+      + (d ? row(`بعد خصم المحل ${num(fmt(d, 1) + pctSign())}`, money(pf.sell)) : '')
+      + row(pf.pl >= 0 ? 'الربح' : 'الخسارة', `${sign(pf.pl)} <span class="cur">${c.sym}</span>`, { cls: 'total' }),
+    )}
+    ${P ? group(
+      row(`سعر غرام عيار ${num(beK)} للتعادل`, money(be), {
+        sub: beGap > 0 ? `السعر الحين ${num(fmt(nowK, c.dec))}، لازم يطلع ${num(fmtPct(beGap, 1))}` : `السعر الحين ${num(fmt(nowK, c.dec))}، أعلى منه بـ ${num(fmtPct(-beGap, 1))}`,
+      })
+      + (cheaper != null ? row('مقارنة بآخر 3 شهور', '', {
+        sub: cheaper >= 0.995 ? 'السعر الحين أرخص سعر في آخر 3 شهور' : cheaper <= 0.005 ? 'السعر الحين أغلى سعر في آخر 3 شهور' : cheaper >= 0.5 ? `السعر الحين أرخص من ${num(fmtPct(cheaper, 0))} من الأيام` : `السعر الحين أغلى من ${num(fmtPct(1 - cheaper, 0))} من الأيام`,
+      }) : ''),
+      { head: 'وين واقف', foot: 'سعر التعادل هو السعر اللي لو بعت عنده ترجع لك فلوسك بالضبط. هذي معلومات تساعدك تقرر، وما فيها توقع إذا السعر بيطلع أو ينزل.' },
+    ) : ''}
+    ${group(
+      t
+        ? `<button type="button" class="row entry" data-action="inv-target">
+            <span class="row-label"><span>${t.side === 'buy' ? 'أشتري' : 'أبيع'} لما يوصل عيار ${num(t.k)} إلى ${num(fmt(t.price, c.dec))}</span><small>${Number.isFinite(tNow) ? `السعر الحين ${num(fmt(tNow, c.dec))}` : ''}</small></span>
+            <span class="row-value"><span class="${ts?.reached ? 'up' : 'muted'}">${ts ? (ts.reached ? 'وصل' : `باقي ${num(fmtPct(Math.abs(ts.gapPct), 1))}`) : '-'}</span></span>
+            ${icon('chevron', 16)}
+          </button>`
+        : actionRow('حدد هدف سعر', 'data-action="inv-target"', { ic: 'edit' }),
+      { head: 'الهدف' },
+    )}
+    ${group(listHTML + actionRow('إضافة شرية', 'data-action="inv-add"', { ic: 'plus' }), {
+      head: 'مشترياتي',
+      foot: other ? `${num(other)} مشتريات بعملة ثانية ما تنحسب هنا.` : '',
+    })}`;
+}
+
+function openPurchase(existing) {
+  const c = cur();
+  let k = existing?.k ?? 24;
+  let mode = existing?.mode ?? 'total';
+  const today = isoDay(new Date());
+  openSheet({
+    title: existing ? 'تعديل الشرية' : 'إضافة شرية',
+    done: 'حفظ',
+    body: `
+      ${group(`
+        ${inputRow('الوزن', `data-p="w" value="${esc(existing?.w ?? '')}"`, 'غ', { placeholder: '0.00' })}
+        ${stackRow('العيار', karatSeg('pk', k))}
+      `)}
+      ${group(`
+        ${stackRow('أعرف', seg('pm', [['total', 'المبلغ الكلي'], ['perGram', 'سعر الغرام']], mode))}
+        ${inputRow(`<span data-p="label">${mode === 'perGram' ? 'سعر الغرام' : 'المبلغ الكلي'}</span>`, `data-p="amount" value="${esc(existing ? (mode === 'perGram' ? existing.perGram : existing.total) : '')}"`, c.sym, { placeholder: '0.000' })}
+        ${row('<span data-p="otherLabel"></span>', '<span data-p="other" class="muted">-</span>')}
+      `, { foot: 'اكتب المبلغ اللي دفعته فعلًا، شامل أي مصنعية أو رسوم.' })}
+      ${group(`
+        <label class="row field"><span class="row-label"><span>التاريخ</span></span><span class="row-input"><input type="date" data-p="date" max="${today}" value="${esc(existing?.date ?? today)}"></span></label>
+        <label class="row field text"><span class="row-label"><span>ملاحظة</span></span><span class="row-input"><input data-p="note" maxlength="60" placeholder="سبيكة دلمون" value="${esc(existing?.note ?? '')}"></span></label>
+      `)}
+      ${existing ? group(actionRow('حذف الشرية', 'data-p="del"', { ic: 'trash', cls: 'destructive' })) : ''}`,
+  }, (sheet) => {
+    const q = (n) => sheet.querySelector(`[data-p="${n}"]`);
+    const read = () => purchaseCost({ w: q('w').value, mode, amount: q('amount').value });
+    const paint = () => {
+      const r = read();
+      q('label').textContent = mode === 'perGram' ? 'سعر الغرام' : 'المبلغ الكلي';
+      q('otherLabel').textContent = mode === 'perGram' ? 'المبلغ الكلي' : 'سعر الغرام';
+      q('other').innerHTML = r ? money(mode === 'perGram' ? r.total : r.perGram) : '-';
+    };
+    paint();
+    if (!existing) q('w').focus({ preventScroll: true });
+    sheet.oninput = paint;
+    sheet.onclick = (ev) => {
+      const b = ev.target.closest('button');
+      if (!b) return;
+      if (b.dataset.pk) { k = Number(b.dataset.pk); selectSeg(b); }
+      else if (b.dataset.pm) {
+        const r = read();
+        mode = b.dataset.pm;
+        selectSeg(b);
+        // Carry the number across so switching doesn't lose what was typed.
+        if (r) q('amount').value = String(+(mode === 'perGram' ? r.perGram : r.total).toFixed(3));
+        paint();
+      } else if (b.dataset.p === 'del') {
+        if (!b.dataset.armed) { b.dataset.armed = '1'; b.querySelector('span').textContent = 'اضغط مرة ثانية للتأكيد'; return; }
+        S.invest.holdings = S.invest.holdings.filter((h) => h.id !== existing.id);
+        persistInvest(); closeSheet(); toast('تم الحذف'); renderInvest();
+      } else if (b.dataset.done !== undefined) {
+        const r = read();
+        if (!r) return toast('اكتب الوزن والمبلغ');
+        const rec = {
+          id: existing?.id ?? uid(), w: parseNum(q('w').value), k, mode, total: r.total, perGram: r.perGram,
+          date: q('date').value || today, note: q('note').value.trim(), currency: existing?.currency ?? S.settings.currency,
+        };
+        if (existing) Object.assign(existing, rec); else S.invest.holdings.push(rec);
+        S.invest.holdings.sort((a, b2) => (a.date < b2.date ? 1 : -1));
+        persistInvest(); closeSheet(); toast('تم الحفظ'); renderInvest();
+      }
+    };
+  });
+}
+
+function openTarget() {
+  const c = cur();
+  const t = S.invest.target;
+  let side = t?.side ?? 'sell';
+  let k = t?.k ?? (investRows()[0]?.k ?? 24);
+  const P = p24();
+  openSheet({
+    title: 'هدف السعر',
+    done: 'حفظ',
+    body: `
+      ${group(`
+        ${stackRow('أبي', seg('ts', [['sell', 'أبيع لما يطلع'], ['buy', 'أشتري لما ينزل']], side))}
+        ${stackRow('العيار', karatSeg('tk', k))}
+        ${inputRow('سعر الغرام', `data-t="price" value="${esc(t?.price ?? '')}"`, c.sym, { placeholder: P ? fmt(kp(P, k), c.dec) : '0.000' })}
+      `, { foot: 'التطبيق يوريك كم باقي على السعر اللي تبيه، ويتلون أخضر لما يوصله.' })}
+      ${t ? group(actionRow('إلغاء الهدف', 'data-t="del"', { ic: 'trash', cls: 'destructive' })) : ''}`,
+  }, (sheet) => {
+    const input = sheet.querySelector('[data-t="price"]');
+    sheet.onclick = (ev) => {
+      const b = ev.target.closest('button');
+      if (!b) return;
+      if (b.dataset.ts) { side = b.dataset.ts; selectSeg(b); }
+      else if (b.dataset.tk) { k = Number(b.dataset.tk); selectSeg(b); if (P) input.placeholder = fmt(kp(P, k), c.dec); }
+      else if (b.dataset.t === 'del') { S.invest.target = null; persistInvest(); closeSheet(); renderInvest(); }
+      else if (b.dataset.done !== undefined) {
+        const v = parseNum(input.value);
+        if (!(v > 0)) return toast('اكتب السعر');
+        S.invest.target = { side, k, price: v };
+        persistInvest(); closeSheet(); toast('تم حفظ الهدف'); renderInvest();
       }
     };
   });
@@ -1477,7 +1701,7 @@ function paintConv() {
 }
 
 function exportBackup() {
-  const data = { app: 'iyar', v: 1, at: new Date().toISOString(), settings: S.settings, entries: S.entries };
+  const data = { app: 'iyar', v: 1, at: new Date().toISOString(), settings: S.settings, entries: S.entries, invest: S.invest };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const name = `iyar-backup-${isoDay(new Date())}.json`;
   const file = new File([blob], name, { type: 'application/json' });
@@ -1501,6 +1725,11 @@ async function importBackup(file) {
     const added = data.entries.filter((e) => e && e.id && Array.isArray(e.items) && !have.has(e.id));
     S.entries = [...S.entries, ...added].sort((a, b) => b.ts - a.ts);
     save('entries', S.entries);
+    if (Array.isArray(data.invest?.holdings)) {
+      const haveInv = new Set(S.invest.holdings.map((h) => h.id));
+      S.invest.holdings.push(...data.invest.holdings.filter((h) => h && h.id && !haveInv.has(h.id)));
+      persistInvest();
+    }
     toast(`تم استيراد ${fmt(added.length, 0)} عنصر`);
   } catch {
     toast('الملف غير صالح');

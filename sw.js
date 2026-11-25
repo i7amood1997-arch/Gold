@@ -2,7 +2,7 @@
 // the next launch; the cache only answers when there is no network. Price
 // APIs are cross-origin and never touched here — the app caches the last
 // good price itself.
-const CACHE = 'iyar-v9';
+const CACHE = 'iyar-v10';
 
 const SHELL = [
   './',
@@ -16,6 +16,7 @@ const SHELL = [
   './js/icons.js',
   './js/forecast.js',
   './js/events.js',
+  './js/invest.js',
   './icons/favicon.svg',
   './icons/icon-192.png',
 ];
