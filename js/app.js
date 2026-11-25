@@ -9,7 +9,7 @@ import { weekRange, HISTORY_DAYS, MODEL } from './forecast.js';
 import { EVENTS, KINDS, EVENTS_UNTIL } from './events.js';
 import { purchaseCost, portfolio, cheaperThan, targetStatus } from './invest.js';
 
-export const BUILD = '2026.11.25-1';
+export const BUILD = '2026.11.25-2';
 
 /* ======================================================================
    State
@@ -1326,8 +1326,9 @@ function renderInvest() {
     ${seg('vm', [['jewel', 'مجوهراتي'], ['invest', 'استثماراتي']], S.vaultMode)}
     <div id="inv-body"></div>
     ${S.invest.holdings.length ? group(
-      inputRow('خصم المحل عند البيع', `data-inv-discount value="${S.invest.discountPct || ''}"`, pctSign(), { placeholder: '0' }),
-      { head: 'البيع', foot: 'المحل لما يشتري منك ذهب ياخذه غالبًا بأقل من سعر السوق. اكتب الفرق هنا عشان يطلع لك الربح الحقيقي.' },
+      inputRow('خصم المحل عند البيع', `data-inv-discount value="${S.invest.discountPct ? +S.invest.discountPct.toFixed(2) : ''}"`, pctSign(), { placeholder: '0' })
+      + actionRow('طابق مع سعر البيع في البنك أو المحل', 'data-action="inv-sellcal"', { ic: 'edit' }),
+      { head: 'البيع', foot: 'البنك أو المحل لما يشتري منك ذهب يدفع أقل من سعر البيع للزبائن. اكتب السعر اللي يعطيك إياه، والتطبيق يحسب الفرق ويطلع لك قيمة البيع الحقيقية.' },
     ) : ''}`;
   paintInvest();
   ensureHistory(); // the "cheaper than" line needs recent daily prices
@@ -1338,6 +1339,7 @@ function renderInvest() {
     else if (b.dataset.action === 'inv-add') openPurchase();
     else if (b.dataset.inv) openPurchase(S.invest.holdings.find((h) => h.id === b.dataset.inv));
     else if (b.dataset.action === 'inv-target') openTarget();
+    else if (b.dataset.action === 'inv-sellcal') openSellCalib();
   };
   view.oninput = (e) => {
     if (e.target.dataset.invDiscount === undefined) return;
@@ -1397,14 +1399,14 @@ function paintInvest() {
 
   box.innerHTML = `
     <div class="quote">
-      <p class="quote-label">${d ? `قيمتها لو بعت الحين، بعد خصم المحل ${num(fmt(d, 1) + pctSign())}` : 'قيمتها بسعر السوق الحين'}</p>
+      <p class="quote-label">${d ? 'قيمتها لو بعت الحين' : 'قيمتها بسعر السوق الحين'}</p>
       <p class="quote-price">${P ? `${num(fmt(pf.sell, c.dec))}<span class="cur">${c.sym}</span>` : '<span class="skeleton"></span>'}</p>
       ${P ? `<p class="quote-change">${sign(pf.pl)} <span class="pill ${pf.pl >= 0 ? 'up' : 'down'}">${pct(pf.plPct)}</span> <span class="muted">${pf.pl >= 0 ? 'ربح' : 'خسارة'}</span></p>` : ''}
     </div>
     ${group(
       row('دفعت', money(pf.cost))
       + row('قيمتها بسعر السوق', money(pf.market))
-      + (d ? row(`بعد خصم المحل ${num(fmt(d, 1) + pctSign())}`, money(pf.sell)) : '')
+      + (d ? row('لو بعتها الحين', money(pf.sell), { sub: `بعد خصم البيع ${num(fmt(d, 2) + pctSign())}` }) : '')
       + row(pf.pl >= 0 ? 'الربح' : 'الخسارة', `${sign(pf.pl)} <span class="cur">${c.sym}</span>`, { cls: 'total' }),
     )}
     ${P ? group(
@@ -1492,6 +1494,50 @@ function openPurchase(existing) {
         if (existing) Object.assign(existing, rec); else S.invest.holdings.push(rec);
         S.invest.holdings.sort((a, b2) => (a.date < b2.date ? 1 : -1));
         persistInvest(); closeSheet(); toast('تم الحفظ'); renderInvest();
+      }
+    };
+  });
+}
+
+// The user types the buy-back rate their bank or shop shows; the gap to the
+// app's price becomes the sell discount, so values match what they'd receive.
+function openSellCalib() {
+  const c = cur();
+  const P = p24();
+  if (!P) return toast('انتظر حتى يصل السعر أولًا');
+  let k = investRows()[0]?.k ?? 24;
+  openSheet({
+    title: 'سعر البيع',
+    done: 'حفظ',
+    body: `
+      <p class="sheet-intro">اكتب سعر الغرام اللي يعطيك إياه البنك أو المحل لما تبيع له، مثل «Exchange Rate» في تطبيق البنك.</p>
+      ${group(`
+        ${stackRow('العيار', karatSeg('sk', k))}
+        ${inputRow('سعر البيع للغرام', 'data-s="v"', c.sym, { placeholder: '0.000' })}
+      `)}
+      ${group('<div data-s="out"></div>', { foot: 'السعر يتغير مع السوق، والفرق بالنسبة غالبًا يبقى قريب. لو تغير هامش البنك، طابقه مرة ثانية.' })}`,
+  }, (sheet) => {
+    const input = sheet.querySelector('[data-s="v"]');
+    const out = sheet.querySelector('[data-s="out"]');
+    const pct = () => { const v = parseNum(input.value); return v > 0 ? (1 - v / kp(P, k)) * 100 : NaN; };
+    const paint = () => {
+      const d = pct();
+      out.innerHTML = row(`سعر عيار ${num(k)} في التطبيق`, money(kp(P, k)))
+        + row('خصم البيع', Number.isFinite(d) ? num(`${fmt(d, 2)}${pctSign()}`) : '-', { cls: Number.isFinite(d) && (d < 0 || d > 15) ? 'bad' : '' });
+    };
+    paint();
+    input.focus({ preventScroll: true });
+    input.oninput = paint;
+    sheet.onclick = (ev) => {
+      const b = ev.target.closest('button');
+      if (!b) return;
+      if (b.dataset.sk) { k = Number(b.dataset.sk); selectSeg(b); paint(); }
+      else if (b.dataset.done !== undefined) {
+        const d = pct();
+        if (!Number.isFinite(d)) return toast('اكتب السعر');
+        if (d < 0 || d > 15) return toast('السعر بعيد عن سعر السوق، تأكد من العيار');
+        S.invest.discountPct = Math.round(d * 10000) / 10000;
+        persistInvest(); closeSheet(); toast(`تم، خصم البيع ${fmt(d, 2)}%`); renderInvest();
       }
     };
   });
